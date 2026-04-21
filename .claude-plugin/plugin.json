@@ -1,0 +1,10 @@
+{
+  "name": "bench-cowork",
+  "description": "BenchAGI agent fleet + skills for Claude Code. Tier D of the harness ladder — no OpenClaw install required, talks to benchagi.com for canon + billing. Cycle 6: 7 agents + 7 skills + 3 MCP servers + /bench-login auth + Amendment-10 pre-commit hook.",
+  "version": "0.2.0",
+  "author": {
+    "name": "BenchAGI"
+  },
+  "homepage": "https://benchagi.com",
+  "license": "proprietary"
+}

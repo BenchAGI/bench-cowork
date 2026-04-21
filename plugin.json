@@ -1,0 +1,65 @@
+{
+  "name": "bench-cowork",
+  "version": "0.2.0",
+  "description": "BenchAGI agent fleet + skills for Claude Code. Tier D of the harness ladder — no OpenClaw install required, talks to benchagi.com for canon + billing. Cycle 6: 7 agents + 7 skills + 3 MCP servers + /bench-login auth + Amendment-10 pre-commit hook.",
+  "author": "BenchAGI",
+  "repository": "https://github.com/BenchAGI/bench-cowork",
+  "homepage": "https://benchagi.com",
+  "license": "proprietary",
+  "claudeCode": {
+    "minVersion": "0.15.0",
+    "provides": {
+      "skills": [
+        "skills/aurelius-email",
+        "skills/wiki-capture",
+        "skills/hammer-anvil",
+        "skills/simplify",
+        "skills/bench-onboarding",
+        "skills/review",
+        "skills/security-review"
+      ],
+      "agents": [
+        "agents/aurelius.md",
+        "agents/ember.md",
+        "agents/bailey.md",
+        "agents/cole.md",
+        "agents/piper.md",
+        "agents/kestrel-coder.md",
+        "agents/sage.md"
+      ],
+      "commands": [
+        "commands/aurelius.md",
+        "commands/ember.md",
+        "commands/bailey.md",
+        "commands/cole.md",
+        "commands/piper.md",
+        "commands/sage.md",
+        "commands/kestrel-coder.md",
+        "commands/wiki-capture.md",
+        "commands/bench-login.md"
+      ],
+      "mcp": [
+        "mcp/bench-wiki.json",
+        "mcp/bench-canvas.json",
+        "mcp/bench-slack.json"
+      ],
+      "hooks": [
+        "hooks/pre-commit-canvas-update.sh"
+      ]
+    }
+  },
+  "config": {
+    "bench_api_base": {
+      "description": "Base URL for Bench API. Override for staging.",
+      "default": "https://benchagi.com/api/v1"
+    },
+    "bench_user_email": {
+      "description": "Authenticated user's email. Set via /bench-login.",
+      "default": null
+    },
+    "bench_instance_id": {
+      "description": "Instance ID this Cowork session operates against. Leave null for personal canon.",
+      "default": null
+    }
+  }
+}

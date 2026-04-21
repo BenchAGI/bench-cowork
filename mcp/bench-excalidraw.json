@@ -1,0 +1,75 @@
+{
+  "name": "bench-excalidraw",
+  "description": "Generate Excalidraw sketches in the Bench Obsidian vault. Agents emit a compact DSL; the server materializes a valid `.excalidraw.md` file with auto-layout, stable bindings, and hand-drawn styling. Raw-JSON path exists for long-tail cases. Status: DRAFT — pending Phase 1 DSL library @bench/excalidraw-dsl.",
+  "status": "draft",
+  "transport": {
+    "type": "http",
+    "base": "${bench_api_base}",
+    "auth": {
+      "type": "bearer",
+      "token_env": "BENCH_COWORK_TOKEN"
+    }
+  },
+  "tools": [
+    {
+      "name": "excalidraw_diagram_from_dsl",
+      "description": "Primary tool. Materialize a diagram from a compact YAML DSL (nodes + edges + layout hint). ~10x cheaper than emitting raw JSON. Use for: agent flows, tier ladders, data pipelines, lifecycle loops, simple org charts. Library handles layout, collision avoidance, and bindings.",
+      "method": "POST",
+      "path": "/excalidraw/diagram",
+      "body_schema": {
+        "dsl": "string (YAML — see DSL spec)",
+        "output_path": "string (vault-relative, e.g. `_boards/excalidraw-experiments/foo.excalidraw.md`)",
+        "theme": "light | dark (default: dark)",
+        "overwrite": "boolean (default: false)",
+        "instanceId": "string (optional — for billing attribution)"
+      },
+      "response_schema": {
+        "path": "string",
+        "element_count": "number",
+        "bytes": "number"
+      }
+    },
+    {
+      "name": "excalidraw_from_template",
+      "description": "Shortcut over the DSL for named templates. Templates: `agent_flow` (N boxes + labeled arrows), `tier_ladder` (stacked blocks + badges), `data_pipeline` (horizontal flow), `lifecycle_loop` (circular). Callers supply labels; the template supplies layout + colors. Cheapest path per call — keep this as the default for structured, recurring visuals.",
+      "method": "POST",
+      "path": "/excalidraw/from-template",
+      "body_schema": {
+        "template": "agent_flow | tier_ladder | data_pipeline | lifecycle_loop",
+        "params": "object (template-specific: {labels: string[], statuses?: string[], ...})",
+        "output_path": "string",
+        "theme": "light | dark (default: dark)",
+        "instanceId": "string (optional)"
+      }
+    },
+    {
+      "name": "excalidraw_write_raw",
+      "description": "Escape hatch. Accepts a full Excalidraw scene JSON and wraps it in the `.excalidraw.md` shell. Use ONLY when the DSL/templates can't express the diagram (e.g., novel layout, custom icons, embedded images). Caller-provided JSON is validated against the Excalidraw v2 scene schema before write; invalid JSON returns 400. Expensive — prefer the DSL path.",
+      "method": "POST",
+      "path": "/excalidraw/write-raw",
+      "body_schema": {
+        "scene": "object (Excalidraw v2 scene JSON: {type, version, source, elements, appState, files})",
+        "output_path": "string",
+        "overwrite": "boolean (default: false)",
+        "instanceId": "string (optional)"
+      }
+    }
+  ],
+  "notes": {
+    "cost_policy": "Per-call, not per-agent-turn. DO NOT wire into agent loops that fire on every user message — generating drawings automatically is expensive without signal. Call only when a diagram is explicitly useful (canon authoring, customer-facing support reply, onboarding doc).",
+    "vault_location": "All writes land in the Obsidian vault at ~/.openclaw/wiki/main/. Path prefix `_boards/excalidraw-experiments/` or `canon/topics/*/diagrams/` recommended. Respect .gitignore — vault is user-local, drawings sync via the wiki-mirror pipeline.",
+    "layout_caveat": "DSL library auto-layout is good for ≤ 10 nodes. For denser graphs, library emits a warning and falls through to a best-effort packed layout — human may need to tidy in Excalidraw editor.",
+    "not_yet_implemented": [
+      "excalidraw_annotate_existing — overlay on an existing drawing. Needs parse-edit-rewrite. Punted until demand.",
+      "excalidraw_to_svg — export to SVG for embedding outside Obsidian. Punted.",
+      "excalidraw_from_prompt — free-text to diagram. This would re-introduce the expensive raw-JSON path. Punted."
+    ]
+  },
+  "dsl_spec_preview": {
+    "example": "nodes:\n  a: {type: ellipse, label: 'Aurelius', color: blue}\n  b: {type: ellipse, label: 'Bailey',   color: green}\n  h: {type: ellipse, label: 'Human',    color: red}\nedges:\n  - {from: a, to: b, label: 'coordinates\\ndecision'}\n  - {from: b, to: h, label: 'triage\\ninbox'}\n  - {from: h, dangling_down: 'approve / act', style: dashed}\nlayout: horizontal-flow\ntheme: dark\ntitle: 'Agent Handoff'",
+    "node_types": ["rectangle", "ellipse", "diamond"],
+    "edge_styles": ["solid", "dashed", "dotted"],
+    "layouts": ["horizontal-flow", "vertical-stack", "grid", "circle"],
+    "colors": ["blue", "green", "red", "purple", "cyan", "orange", "yellow", "gray"]
+  }
+}

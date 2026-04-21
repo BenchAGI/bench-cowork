@@ -1,0 +1,42 @@
+{
+  "name": "bench-wiki",
+  "description": "Read and write BenchAGI canon entries via the /api/v1/wiki endpoints. All calls carry the user's Bench UID for scoping + billing.",
+  "transport": {
+    "type": "http",
+    "base": "${bench_api_base}",
+    "auth": {
+      "type": "bearer",
+      "token_env": "BENCH_COWORK_TOKEN"
+    }
+  },
+  "tools": [
+    {
+      "name": "wiki_canon_read",
+      "description": "Read approved canon entries. Filters: kind (canon|synthesis|dream), agent, rarity, instanceId. Returns entries with their rarity and approval status.",
+      "method": "GET",
+      "path": "/wiki/canon",
+      "query_params": ["kind", "agent", "rarity", "instanceId", "limit"]
+    },
+    {
+      "name": "wiki_ingest",
+      "description": "Ingest a new canon/synthesis/dream entry. Requires title, body, kind, agent, rarity. Goes through classifier + auto-approve gate if enabled.",
+      "method": "POST",
+      "path": "/wiki/ingest",
+      "body_schema": {
+        "title": "string",
+        "body": "string (markdown)",
+        "kind": "canon | synthesis | dream",
+        "agent": "string (agent id)",
+        "rarity": "common | uncommon | rare | epic | legendary",
+        "instanceId": "string (optional)"
+      }
+    },
+    {
+      "name": "wiki_search",
+      "description": "Full-text search across approved canon.",
+      "method": "GET",
+      "path": "/wiki/search",
+      "query_params": ["q", "kind", "agent", "limit"]
+    }
+  ]
+}

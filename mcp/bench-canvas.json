@@ -1,0 +1,46 @@
+{
+  "name": "bench-canvas",
+  "description": "Read and update BenchAGI command-center canvas tiles, drift-state snapshots, and edge-flow state. Enforces Amendment 10 (truth-sync to canvas). All calls carry the user's Bench UID for scoping.",
+  "transport": {
+    "type": "http",
+    "base": "${bench_api_base}",
+    "auth": {
+      "type": "bearer",
+      "token_env": "BENCH_COWORK_TOKEN"
+    }
+  },
+  "tools": [
+    {
+      "name": "canvas_tile_update",
+      "description": "Update the text of a canvas tile by node_id. Writes through to the vault via the wiki-mirror pipeline (or direct Firestore fallback). Enforces Amendment 10 truth-sync.",
+      "method": "POST",
+      "path": "/cowork/canvas/tile",
+      "body_schema": {
+        "node_id": "string (canvas node ID; maps to _boards/nodes/<id>.md)",
+        "new_text": "string (full replacement markdown for the tile body)",
+        "reason": "string (optional; short explanation for the audit log)"
+      }
+    },
+    {
+      "name": "canvas_drift_state",
+      "description": "Read the latest drift-detector snapshot. Returns status per tracked tile (green/yellow/red) and the most recent failing check. Source: platform/launchReadiness/<date> written by Cycle 5's daily check.",
+      "method": "GET",
+      "path": "/cowork/canvas/drift",
+      "query_params": ["date"]
+    },
+    {
+      "name": "canvas_tile_read",
+      "description": "Read the current text of a canvas tile by node_id. Useful before updating so callers don't overwrite unrelated state.",
+      "method": "GET",
+      "path": "/cowork/canvas/tile",
+      "query_params": ["node_id"]
+    },
+    {
+      "name": "canvas_edge_flow",
+      "description": "Read the edge-flow state — which tiles currently point to which. Used when a coordinator agent needs to understand what a change cascade would touch.",
+      "method": "GET",
+      "path": "/cowork/canvas/edges",
+      "query_params": ["from_node_id", "to_node_id"]
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "name": "bench-slack",
+  "description": "Relay messages through BenchAGI's Slack relay infrastructure. Wraps sessions.create (open new thread) and sessions.send (send on cached sessionKey). All calls carry the user's Bench UID; relay enforces per-tenant Slack bot token.",
+  "transport": {
+    "type": "http",
+    "base": "${bench_api_base}",
+    "auth": {
+      "type": "bearer",
+      "token_env": "BENCH_COWORK_TOKEN"
+    }
+  },
+  "tools": [
+    {
+      "name": "slack_session_create",
+      "description": "Open a new Slack relay session: resolves the recipient (Bench UID or email), picks the right channel/DM, posts the first message, and returns a sessionKey for follow-ups in the same thread.",
+      "method": "POST",
+      "path": "/cowork/slack/sessions",
+      "body_schema": {
+        "recipient": "string (Bench UID, email, or <@Uxxx> mention)",
+        "message": "string (first message text; supports Slack mrkdwn)",
+        "agent": "string (agent id — 'aurelius' | 'sage' | 'ember' | 'cole' | ...)",
+        "approver": "string (named human approving the send)"
+      }
+    },
+    {
+      "name": "slack_session_send",
+      "description": "Send a follow-up message on an existing sessionKey (same thread). sessionKey TTL is 1 hour; expired keys return a specific error so callers know to open a new session.",
+      "method": "POST",
+      "path": "/cowork/slack/sessions/send",
+      "body_schema": {
+        "session_key": "string (from slack_session_create response)",
+        "message": "string",
+        "agent": "string",
+        "approver": "string"
+      }
+    },
+    {
+      "name": "slack_history",
+      "description": "Read recent messages in a thread the caller has relay access to. Does not read arbitrary channel history — only threads the current user's relay session is authorized for.",
+      "method": "GET",
+      "path": "/cowork/slack/history",
+      "query_params": ["session_key", "limit"]
+    }
+  ]
+}
