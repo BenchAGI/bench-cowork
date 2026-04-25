@@ -39,7 +39,7 @@ Rarity controls who sees the entry and how it's surfaced. Default to `common`. B
 | `epic` | Org-level commitment, multi-quarter impact | "Harness tiers A-D committed 2026-04-19" |
 | `legendary` | Reserved for once-a-year landmarks | Initial charter, first-customer win |
 
-When unsure, stay at `common` — the auto-approve gate still lets it through, and humans can promote rarity later via the review queue.
+When unsure, stay at `common` — it keeps review queue triage lightweight, and humans can promote rarity later via the review queue.
 
 ### 3. Choose agent attribution
 
@@ -126,7 +126,7 @@ Drafts don't auto-approve on this surface (unlike the super-admin ingest path). 
 - **Token missing/expired**: the MCP call returns 401 `COWORK_BAD_TOKEN`. Ask the user to run `/bench-login` (and remember to export `BENCH_COWORK_TOKEN` to the shell env — `/bench-login` writes the config file but doesn't auto-export).
 - **Rate limited**: returns 429. Tell the user to wait a minute and retry.
 - **Validation failure**: a 400 response includes `{ error, field? }` — the `field` names which payload property was bad (title / markdown / kind / agent / rarity / instanceId). A 413 means `markdown` exceeded 512 KB.
-- **Duplicate captures**: each call creates a NEW draft doc (unique slug per millisecond + salt) — unlike `wiki_ingest`, there's no hash-based dedup. Don't retry on success; the same content will be stored twice.
+- **Duplicate captures**: exact same-content retries by the same UID within 24h return the original slug with `deduped: true`. Different content still creates a fresh server-generated draft slug. Don't retry on success unless you are recovering from an unknown client-side failure.
 
 ## Tier D vs Tier A/B
 
@@ -136,3 +136,14 @@ Drafts don't auto-approve on this surface (unlike the super-admin ingest path). 
 - Tier D users (this skill) call `wiki_draft` directly — same endpoint, no monorepo needed. The validation rules and field defaults below are identical between the two paths since they hit the same route.
 - Bulk-ingest path (`wiki_ingest`) lands in the per-user shard `users/{uid}/wikiEntries/{slug}`. Single-capture (`wiki_draft`) lands in platform `wikiEntries/{slug}` with `approvalStatus: 'draft'`. Reviewer explicitly promotes either to approved platform canon.
 - Tier D can't do the `backtrace` rollup (needs repo access); that stays a Tier A/B operator action.
+
+## Envelope shape vs `forward.ts` (no normalization across surfaces)
+
+`wiki_draft` and `forward.ts` write to the same Firestore collection but **do not share an envelope contract**:
+
+- `forward.ts` (Tier A/B) sends a structured `frontmatter` JSON object on the ingest envelope (camelCase fields like `capturedBy`, `prNumber`, `mergedAt`); the markdown body is plain prose. See `scripts/wiki-capture/lib/markdown-builder.ts` in the monorepo.
+- `wiki_draft` (this skill) accepts only `{title, markdown, kind, agent, rarity}` — **no `frontmatter` field**. The server rejects unknown fields. Whatever metadata the entry needs (PR refs, dates, sources, verbatim quotes) goes inline in the markdown body.
+
+**Don't try to reformat existing drafts to match `forward.ts`.** The `/api/v1/wiki/draft` route is POST-only; no PUT/PATCH endpoint exists for content edits. Agent voices differ — Aurelius writes legal-track summaries with verbatim quotes; Kestrel-Coder writes structured PR captures with H2 sections. Both are valid canon at this tier. Reviewers normalize via the admin UI on promotion; mechanical reformatting is not a goal.
+
+If you find yourself wanting to "fix" an existing draft's frontmatter, the right move is to (a) ask Cory whether the substance is correct, and (b) if a re-capture is warranted, reject the current draft via the admin UI and call `wiki_draft` again with the corrected body.
