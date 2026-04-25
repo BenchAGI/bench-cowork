@@ -29,7 +29,7 @@
     },
     {
       "name": "create_draft",
-      "description": "Create a Gmail draft on the named account. Saves to Drafts — never sends. Args: { account_email: string, to: string, subject: string, body: string, in_reply_to?: string (thread ID) }."
+      "description": "Create a Gmail draft on the named account. Saves to Drafts — never sends. Args: { account_email: string, to: string, subject: string, body: string, htmlBody?: string, in_reply_to?: string (thread ID) }."
     },
     {
       "name": "list_labels",
