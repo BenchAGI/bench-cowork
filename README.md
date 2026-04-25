@@ -5,9 +5,9 @@
 ## What this gives you
 
 - **7 agent personalities** as Claude Code subagents: Aurelius, Ember, Bailey, Cole, Piper, Kestrel-Coder, Sage
-- **Skills**: `aurelius-email`, `wiki-capture`, `hammer-anvil`, `simplify`, `review`, `security-review`, `bench-onboarding`
+- **Skills**: `aurelius-email`, `triage-mail`, `wiki-capture`, `hammer-anvil`, `simplify`, `review`, `security-review`, `bench-onboarding`
 - **Slash commands**: `/aurelius`, `/ember`, `/bailey`, `/cole`, `/piper`, `/sage`, `/wiki-capture`, `/bench-login`
-- **MCP servers**: `bench-wiki` (canon read/write), `bench-canvas` (tile updates + drift), `bench-slack` (optional)
+- **MCP servers**: `bench-wiki` (canon read/write), `bench-canvas` (tile updates + drift), `bench-slack` (optional), `bench-mail` (multi-account Gmail triage)
 - **Hook**: Amendment 10 enforcement — PRs touching canvas-tracked code paths must update the tile
 
 All powered by benchagi.com over HTTPS. No local daemons, no fs.watch, no launchd.
@@ -26,7 +26,7 @@ That's it. Try:
 
 ```bash
 /aurelius can you follow up with the JC pilot team?
-@bailey help me triage my inbox
+/triage-mail
 /wiki-capture PR #471
 ```
 
@@ -75,14 +75,14 @@ tools/bench-cowork/
 
 ## Status
 
-**Shipped 2026-04-20 (Cycle 6)** — 7 agents + 7 skills + 3 MCP servers + `/bench-login` auth flow + Amendment-10 pre-commit hook. Rate-limiter is stubbed pending Cycle 7 wire-up.
+**Shipped 2026-04-20 (Cycle 6)** — 7 agents + 8 skills + 4 MCP servers + `/bench-login` auth flow + Amendment-10 pre-commit hook. Rate-limiter is stubbed pending Cycle 7 wire-up.
 
 | Surface | Count | Status |
 |---|---|---|
 | Agents | 7 | ✅ Aurelius, Ember, Bailey, Cole, Piper, Kestrel-Coder, Sage |
-| Skills | 7 | ✅ aurelius-email, wiki-capture, hammer-anvil, simplify, bench-onboarding, review, security-review |
+| Skills | 8 | ✅ aurelius-email, triage-mail, wiki-capture, hammer-anvil, simplify, bench-onboarding, review, security-review |
 | Slash commands | 9 | ✅ `/aurelius`, `/ember`, `/bailey`, `/cole`, `/piper`, `/sage`, `/kestrel-coder`, `/wiki-capture`, `/bench-login` |
-| MCP servers | 3 | ✅ bench-wiki, bench-canvas, bench-slack (bench-excalidraw draft) |
+| MCP servers | 4 | ✅ bench-wiki, bench-canvas, bench-slack, bench-mail (bench-excalidraw draft) |
 | Hooks | 1 | ✅ pre-commit canvas-update nudge (Amendment 10) |
 | Cloud endpoints | 7 | ✅ `/api/v1/cowork/{auth,canvas/tile,canvas/drift,canvas/edges,slack/sessions,slack/sessions/send,slack/history}` |
 
