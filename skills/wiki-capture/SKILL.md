@@ -130,6 +130,9 @@ Drafts don't auto-approve on this surface (unlike the super-admin ingest path). 
 
 ## Tier D vs Tier A/B
 
-- Tier A/B users running in the monorepo can use the original `scripts/wiki-capture/forward.ts` script, which routes through the super-admin `/api/v1/wiki/ingest` endpoint (X-API-Key) and writes directly to platform canon. Tier D users go through `wiki_draft` (single-entry, server-generated slug) or `wiki_ingest` (bulk, user-provided slugs) — both cowork-authed, both writing drafts only.
-- Single-capture path (`wiki_draft`) lands in `wikiEntries/{slug}` with `approvalStatus: 'draft'`. Bulk-ingest path (`wiki_ingest`) lands in the per-user shard `users/{uid}/wikiEntries/{slug}`. Reviewer explicitly promotes either to approved platform canon.
+- Tier A/B users running in the monorepo can use `scripts/wiki-capture/forward.ts`, which routes by flag:
+  - `--pr <N>` → super-admin `/api/v1/wiki/ingest` (X-API-Key, platform canon).
+  - `--title "<...>" --body-file <path>` → cowork-auth `/api/v1/wiki/draft` (the same endpoint this MCP tool hits, just from the script side). Reads `~/.claude/config/bench-cowork.json` for the JWT.
+- Tier D users (this skill) call `wiki_draft` directly — same endpoint, no monorepo needed. The validation rules and field defaults below are identical between the two paths since they hit the same route.
+- Bulk-ingest path (`wiki_ingest`) lands in the per-user shard `users/{uid}/wikiEntries/{slug}`. Single-capture (`wiki_draft`) lands in platform `wikiEntries/{slug}` with `approvalStatus: 'draft'`. Reviewer explicitly promotes either to approved platform canon.
 - Tier D can't do the `backtrace` rollup (needs repo access); that stays a Tier A/B operator action.
