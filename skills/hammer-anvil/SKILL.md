@@ -37,6 +37,7 @@ Use Hammer/Anvil especially for:
 - Security-sensitive changes
 - Anything involving auth, billing, or data-access boundaries
 - Features that touch more than 3 components
+- Firebase/App Hosting rollout or production deployment changes
 
 ## Default workflow
 
@@ -74,6 +75,8 @@ Just the diff. No narrative unless the user asks. Show:
 - Key lines
 - Test run results
 - What to verify before merging
+
+For Firebase/App Hosting, rollout, deployment, production, Cloud Build, or CI/CD work, Anvil must first read `docs/operations/app-hosting-rollout.md` and keep production App Hosting rollouts exact-SHA and GitHub environment-gated through `.github/workflows/apphosting-rollout.yml`. Anvil must not trigger production unless the user explicitly asks for a production rollout and the approval path is clear. Do not add `TURBO_TOKEN` App Hosting YAML references until the Secret Manager secret exists and backend access has been granted.
 
 ## Pairing with other agents
 

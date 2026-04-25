@@ -12,31 +12,62 @@
   "tools": [
     {
       "name": "wiki_canon_read",
-      "description": "Read approved canon entries. Filters: kind (canon|synthesis|dream), agent, rarity, instanceId. Returns entries with their rarity and approval status.",
+      "description": "Read approved canon entries. Filters: kind (canon|synthesis|dream|consolidation|protocol|sop), agent, rarity, instanceId. Returns entries with their rarity and approval status.",
       "method": "GET",
       "path": "/wiki/canon",
       "query_params": ["kind", "agent", "rarity", "instanceId", "limit"]
     },
     {
       "name": "wiki_ingest",
-      "description": "Ingest a new canon/synthesis/dream entry. Requires title, body, kind, agent, rarity. Goes through classifier + auto-approve gate if enabled.",
+      "description": "Bulk-ingest one or more canon/synthesis/dream entries from a local vault into the caller's per-user shard at users/{uid}/wikiEntries/{slug}. Cowork-auth (Bench JWT) — not the super-admin OpenClaw ingest path. Body is a wrapped array: { entries: [Entry, ...] } — even for a single entry. Minimum entry is { slug, title, markdown }; localHash and localMtime auto-fill server-side from sha256(markdown) and server clock. Server derives kind/agent/rarity from the slug and stamps approvalStatus='draft', submittedVia='cowork-ingest', authorUid/authorEmail from auth. Dedup by localHash within the user shard. All entries land as drafts; reviewer promotes to platform canon explicitly. Server caps: 500 entries per request, 512 KB markdown per entry.",
       "method": "POST",
-      "path": "/wiki/ingest",
+      "path": "/cowork/wiki/ingest",
       "body_schema": {
-        "title": "string",
-        "body": "string (markdown)",
-        "kind": "canon | synthesis | dream",
-        "agent": "string (agent id)",
-        "rarity": "common | uncommon | rare | epic | legendary",
-        "instanceId": "string (optional)"
+        "entries": "Array<Entry> (required, 1..500)",
+        "_entry_shape": {
+          "slug": "string (required; kebab-case; matches /^[a-z0-9][a-z0-9\\-_.]*$/i; no '/'; max 256 chars)",
+          "title": "string (required)",
+          "markdown": "string (required; was called 'body' in 0.2.0 — renamed to 'markdown'; max 512 KB utf-8)",
+          "localHash": "string (optional in 0.3.0+; server fills with sha256(markdown) if omitted; dedup key)",
+          "localMtime": "string (optional in 0.3.0+; ISO 8601 UTC; server fills with now() if omitted)",
+          "frontmatter": "object (optional; arbitrary metadata map)",
+          "sourcePath": "string (optional; defaults to slug)",
+          "sourceInstanceId": "string (optional; /^[A-Za-z0-9_-]{1,128}$/; tenant isolation per ADR-2026-04-19-B)",
+          "kind": "canon | synthesis | dream | consolidation | protocol | sop (optional hint; server derives from slug)",
+          "agent": "string (optional hint; server derives from slug)",
+          "rarity": "common | uncommon | rare | epic | legendary (optional hint; server sets rarityRequired by kind-default)"
+        }
+      },
+      "response_schema": {
+        "ingested": "number (count of created+updated entries)",
+        "totalReceived": "number",
+        "results": "Array<{ slug, action: 'created'|'updated'|'unchanged'|'skipped' }>",
+        "parseErrors": "Array<{ index, error }> (optional; present only when any entries failed validation)"
       }
     },
     {
       "name": "wiki_search",
-      "description": "Full-text search across approved canon.",
+      "description": "Case-insensitive substring search across approved canon. Matches against title + markdown body; returns the same shape as wiki_canon_read with an added `score` (number of matches). Rank-gated to the caller's viewer rank.",
       "method": "GET",
       "path": "/wiki/search",
       "query_params": ["q", "kind", "agent", "limit"]
+    },
+    {
+      "name": "wiki_draft",
+      "description": "Draft a single canon entry from a conversation or session. Member-auth (Cowork JWT); writes to wikiEntries/{slug} with approvalStatus='draft' for admin review — never auto-approves. Payload is flat (NOT wrapped in an `entries` array like wiki_ingest). Author attribution comes from the auth context; authorUid/authorEmail in the payload are ignored. Tenant is drawn from auth.instanceId server-side; sending `instanceId` in the payload returns 400. Use this tool from the wiki-capture skill for user-driven captures; wiki_ingest is only for the super-admin OpenClaw daemon.",
+      "method": "POST",
+      "path": "/wiki/draft",
+      "body_schema": {
+        "title": "string (required; 1..256 chars)",
+        "markdown": "string (required; 1..524288 bytes utf-8)",
+        "kind": "canon | synthesis | dream (required; strict subset — no consolidation/protocol/sop at draft tier)",
+        "agent": "aurelius | bailey | sage | cole | ember | piper | kestrel-coder | aerie (required)",
+        "rarity": "common | uncommon | rare | epic | legendary (required; reviewer can override at promotion)"
+      },
+      "response_schema": {
+        "slug": "string (server-generated; shape: draft-<epoch>-<8-hex>)",
+        "reviewUrl": "string (relative path to the admin review queue with the slug pre-filled)"
+      }
     }
   ]
 }

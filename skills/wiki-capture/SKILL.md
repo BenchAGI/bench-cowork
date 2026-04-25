@@ -5,9 +5,9 @@ description: Capture a merged PR, a conversation summary, or a decision as a can
 
 # Wiki Capture (Tier D)
 
-Drafts canon entries into the Agent Wiki Review Queue so durable knowledge feeds agent context. This is the **Tier D** version — it calls the `bench-wiki` MCP's `wiki_ingest` tool directly, without needing the monorepo checked out locally.
+Drafts canon entries into the Agent Wiki Review Queue so durable knowledge feeds agent context. This is the **Tier D** version — it calls the `bench-wiki` MCP's `wiki_draft` tool directly, without needing the monorepo checked out locally.
 
-**Requires `/bench-login` first.** The MCP call carries your Bench UID for authorship attribution + the classifier + auto-approve gate (per PR #446).
+**Requires `/bench-login` first.** The MCP call carries your Bench UID for authorship attribution; the draft lands with `approvalStatus: 'draft'` until an admin reviews and promotes it. (The separate `wiki_ingest` tool is for bulk-syncing a local vault into your per-user shard at `users/{uid}/wikiEntries/{slug}` — different use case; this skill calls `wiki_draft` for single conversation-born captures.)
 
 ## When to use
 
@@ -57,25 +57,34 @@ Who's the voice this entry belongs to?
 
 If genuinely multi-agent (e.g. a platform-wide decision), use `aerie` — the collective canon owner.
 
-### 4. Call `bench-wiki.wiki_ingest`
+### 4. Call `bench-wiki.wiki_draft`
 
 Load the MCP tool schema if deferred:
 
 ```
-ToolSearch(query: "select:mcp__bench-wiki__wiki_ingest", max_results: 1)
+ToolSearch(query: "select:mcp__bench-wiki__wiki_draft", max_results: 1)
 ```
 
-Then call:
+The payload is **flat** (not wrapped). The server generates the slug (`draft-<epoch>-<hash8>`) — don't compute it on the client. Call:
 
 ```
-mcp__bench-wiki__wiki_ingest({
+mcp__bench-wiki__wiki_draft({
   title: "<short, title-cased, under 80 chars>",
-  body: "<markdown; see body template below>",
+  markdown: "<markdown body; see template below>",
   kind: "canon",
   agent: "<agent>",
   rarity: "<rarity>"
 })
 ```
+
+Notes:
+- `title`, `markdown`, `kind`, `agent`, `rarity` are all **required**.
+- `kind` is a strict subset: `canon | synthesis | dream` only (no `consolidation | protocol | sop` at draft tier — those go through super-admin ingest).
+- `agent` must be one of: `aurelius`, `bailey`, `sage`, `cole`, `ember`, `piper`, `kestrel-coder`, `aerie`.
+- **Do not send `instanceId`** in the payload — the server rejects it with a 400 and derives tenant scoping from `auth.instanceId` instead. Entries created by members inside a tenant are automatically scoped to that tenant; BenchAGI-master entries (null instanceId) come from members with no tenant binding.
+- The doc always lands with `approvalStatus: 'draft'` — there's no auto-approval path on this surface. Admin review promotes it.
+- Max 512 KB utf-8 per `markdown`.
+- `authorUid` / `authorEmail` on the payload are ignored; they come from the auth context.
 
 ### 5. Body template
 
@@ -97,18 +106,30 @@ mcp__bench-wiki__wiki_ingest({
 
 ### 6. Report the slug back
 
-The `wiki_ingest` response includes the new slug. Tell the user:
+The `wiki_draft` response looks like:
 
-> Captured as canon entry `<slug>` (rarity: `<rarity>`). It'll be visible at https://benchagi.com/wiki/canon once the auto-approve gate processes it (seconds).
+```json
+{
+  "slug": "draft-1745280000000-a1b2c3d4",
+  "reviewUrl": "/admin/settings/agent-wiki/review?slug=draft-1745280000000-a1b2c3d4"
+}
+```
+
+Read `slug` and `reviewUrl` and tell the user:
+
+> Captured as canon draft `<slug>` (rarity: `<rarity>`, agent: `<agent>`). It's queued for admin review at `https://benchagi.com<reviewUrl>` — it won't appear in `/wiki/canon` until a super-admin promotes it.
+
+Drafts don't auto-approve on this surface (unlike the super-admin ingest path). Surface the review URL so the user knows where to go.
 
 ## Edge cases
 
-- **Token missing/expired**: the MCP call returns 401 `COWORK_BAD_TOKEN`. Ask the user to run `/bench-login`.
+- **Token missing/expired**: the MCP call returns 401 `COWORK_BAD_TOKEN`. Ask the user to run `/bench-login` (and remember to export `BENCH_COWORK_TOKEN` to the shell env — `/bench-login` writes the config file but doesn't auto-export).
 - **Rate limited**: returns 429. Tell the user to wait a minute and retry.
-- **Duplicate title**: the ingest endpoint dedups by hash; if body is identical, action is `unchanged` — that's fine, no retry needed.
+- **Validation failure**: a 400 response includes `{ error, field? }` — the `field` names which payload property was bad (title / markdown / kind / agent / rarity / instanceId). A 413 means `markdown` exceeded 512 KB.
+- **Duplicate captures**: each call creates a NEW draft doc (unique slug per millisecond + salt) — unlike `wiki_ingest`, there's no hash-based dedup. Don't retry on success; the same content will be stored twice.
 
 ## Tier D vs Tier A/B
 
-- Tier A/B users running in the monorepo can use the original `scripts/wiki-capture/forward.ts` script. Tier D users go through this MCP call.
-- Both paths land in the same Firestore collection (`wikiEntries/{slug}`) and the same review queue.
+- Tier A/B users running in the monorepo can use the original `scripts/wiki-capture/forward.ts` script, which routes through the super-admin `/api/v1/wiki/ingest` endpoint (X-API-Key) and writes directly to platform canon. Tier D users go through `wiki_draft` (single-entry, server-generated slug) or `wiki_ingest` (bulk, user-provided slugs) — both cowork-authed, both writing drafts only.
+- Single-capture path (`wiki_draft`) lands in `wikiEntries/{slug}` with `approvalStatus: 'draft'`. Bulk-ingest path (`wiki_ingest`) lands in the per-user shard `users/{uid}/wikiEntries/{slug}`. Reviewer explicitly promotes either to approved platform canon.
 - Tier D can't do the `backtrace` rollup (needs repo access); that stays a Tier A/B operator action.
