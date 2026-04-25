@@ -1,7 +1,7 @@
 {
   "name": "bench-cowork",
-  "version": "0.3.5",
-  "description": "BenchAGI agent fleet + skills for Claude Code. Tier D of the harness ladder — no OpenClaw install required, talks to benchagi.com for canon + billing. Cycle 6: 7 agents + 7 skills + 3 MCP servers + /bench-login auth + Amendment-10 pre-commit hook. 0.3.5: doc fix — /wiki-capture command frontmatter now references `wiki_draft` (member-auth, single-entry) instead of `wiki_ingest` (cowork-auth, bulk); the SKILL.md and MCP manifest already pointed at wiki_draft since 0.3.1, the command description was the last stale reference. No tool shape changes; wiki_search and wiki_canon_read unchanged. 0.3.4: /bench-login skill now resolves the caller's tenant ID via GET /api/me/identity and caches it as bench_instance_id in the local config; web sidebar avatar links to /app/account. 0.3.3: bench-wiki.wiki_ingest now points at the cowork-authed POST /cowork/wiki/ingest route and hard-shards writes to users/{uid}/wikiEntries/{slug} so Tier D users can bulk-sync a local vault without needing a super-admin key. Entries land as drafts; admin review promotes to platform canon. The prior 0.3.2 super-admin /wiki/ingest route is untouched — it still exists for the OpenClaw daemon. 0.3.2: wiki_draft no longer accepts `instanceId` in the payload — the server derives tenant from auth.instanceId and rejects payload-side claims with 400 (tenant binding). Canon reads (/wiki/canon, /wiki/list, /wiki/[slug]) are now tenant-scoped for members. 0.3.1: adds bench-wiki.wiki_draft tool (member-auth POST /wiki/draft) for conversation-born canon captures. 0.3.0: BREAKING — bench-wiki.wiki_ingest request shape changed from flat object to wrapped { entries: [...] } array; `body` renamed to `markdown`. Server auto-fills localHash/localMtime when omitted. New /wiki/search endpoint + restored wiki_search tool pointing at it. Callers built against 0.2.0 must update.",
+  "version": "0.4.0",
+  "description": "BenchAGI agent fleet + skills for Claude Code. Tier D of the harness ladder — no OpenClaw install required, talks to benchagi.com for canon + billing. 0.4.0: adds bench-mail stdio MCP for multi-account Gmail triage. Customers connect Gmail through apps/web Settings → Integrations → Gmail (Bench Mail); the MCP server reads tokens from users/{uid}/communicationConnections (encrypted with ENCRYPTION_KEY). Tools: list_accounts, search_threads, get_thread, create_draft, list_labels, create_label, apply_label — every tool takes an explicit account_email. v1 does NOT request gmail.send. Cycle 6: 7 agents + 7 skills + 4 MCP servers + /bench-login auth + Amendment-10 pre-commit hook. 0.3.5: doc fix — /wiki-capture command frontmatter now references `wiki_draft` (member-auth, single-entry) instead of `wiki_ingest` (cowork-auth, bulk); the SKILL.md and MCP manifest already pointed at wiki_draft since 0.3.1, the command description was the last stale reference. No tool shape changes; wiki_search and wiki_canon_read unchanged. 0.3.4: /bench-login skill now resolves the caller's tenant ID via GET /api/me/identity and caches it as bench_instance_id in the local config; web sidebar avatar links to /app/account. 0.3.3: bench-wiki.wiki_ingest now points at the cowork-authed POST /cowork/wiki/ingest route and hard-shards writes to users/{uid}/wikiEntries/{slug} so Tier D users can bulk-sync a local vault without needing a super-admin key. Entries land as drafts; admin review promotes to platform canon. The prior 0.3.2 super-admin /wiki/ingest route is untouched — it still exists for the OpenClaw daemon. 0.3.2: wiki_draft no longer accepts `instanceId` in the payload — the server derives tenant from auth.instanceId and rejects payload-side claims with 400 (tenant binding). Canon reads (/wiki/canon, /wiki/list, /wiki/[slug]) are now tenant-scoped for members. 0.3.1: adds bench-wiki.wiki_draft tool (member-auth POST /wiki/draft) for conversation-born canon captures. 0.3.0: BREAKING — bench-wiki.wiki_ingest request shape changed from flat object to wrapped { entries: [...] } array; `body` renamed to `markdown`. Server auto-fills localHash/localMtime when omitted. New /wiki/search endpoint + restored wiki_search tool pointing at it. Callers built against 0.2.0 must update.",
   "author": "BenchAGI",
   "repository": "https://github.com/BenchAGI/bench-cowork",
   "homepage": "https://benchagi.com",
@@ -41,7 +41,8 @@
       "mcp": [
         "mcp/bench-wiki.json",
         "mcp/bench-canvas.json",
-        "mcp/bench-slack.json"
+        "mcp/bench-slack.json",
+        "mcp/bench-mail.json"
       ],
       "hooks": [
         "hooks/pre-commit-canvas-update.sh"
@@ -59,6 +60,34 @@
     },
     "bench_instance_id": {
       "description": "Instance ID this Cowork session operates against. Leave null for personal canon.",
+      "default": null
+    },
+    "monorepo_root": {
+      "description": "Absolute path to the BenchAGI monorepo root. Used by stdio MCP servers (bench-mail) to locate built CLI scripts.",
+      "default": null
+    },
+    "bench_uid": {
+      "description": "Bench UID for the current user. Required by bench-mail to scope token vault reads.",
+      "default": null
+    },
+    "encryption_key": {
+      "description": "Symmetric encryption key matching apps/web ENCRYPTION_KEY. Used by bench-mail's FirestoreTokenVault to decrypt OAuth tokens at rest.",
+      "default": null
+    },
+    "google_client_id": {
+      "description": "Google OAuth client ID (matches apps/web GOOGLE_CLIENT_ID). Used by bench-mail for token refresh.",
+      "default": null
+    },
+    "google_client_secret": {
+      "description": "Google OAuth client secret. Used by bench-mail for token refresh.",
+      "default": null
+    },
+    "firebase_project_id": {
+      "description": "Firebase project ID hosting the bench-mail token vault.",
+      "default": null
+    },
+    "google_application_credentials": {
+      "description": "Path to a Firebase Admin service account JSON file. Set this for stable local-dev; otherwise bench-mail falls back to gcloud Application Default Credentials.",
       "default": null
     }
   }

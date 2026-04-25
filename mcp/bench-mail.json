@@ -1,0 +1,47 @@
+{
+  "name": "bench-mail",
+  "description": "Multi-account Gmail MCP for the Bench crew. Tokens are scoped by Bench UID and stored in the same Firestore collection apps/web writes during the Settings → Integrations → Gmail (Bench Mail) connect flow. Every tool takes an explicit account_email — call list_accounts first to discover which inboxes are connected for the current Bench UID. v1 does NOT request gmail.send; drafts are saved to the user's Drafts folder for human approval (per Piper PRD).",
+  "transport": {
+    "type": "stdio",
+    "command": "node",
+    "args": ["${monorepo_root}/packages/bench-mail/dist/cli.js"],
+    "env": {
+      "BENCH_UID": "${bench_uid}",
+      "ENCRYPTION_KEY": "${encryption_key}",
+      "GOOGLE_CLIENT_ID": "${google_client_id}",
+      "GOOGLE_CLIENT_SECRET": "${google_client_secret}",
+      "FIREBASE_PROJECT_ID": "${firebase_project_id}",
+      "GOOGLE_APPLICATION_CREDENTIALS": "${google_application_credentials}"
+    }
+  },
+  "tools": [
+    {
+      "name": "list_accounts",
+      "description": "List every Gmail account connected to the current Bench UID. Call this BEFORE any other bench-mail tool to discover which account_email values are valid. Returns an array of { email, scopes, expiresAt, lastSyncAt, syncEnabled, syncError }."
+    },
+    {
+      "name": "search_threads",
+      "description": "Search Gmail threads on a named account. Args: { account_email: string, query: string (Gmail query syntax), limit?: number (default 20, max 100) }."
+    },
+    {
+      "name": "get_thread",
+      "description": "Fetch the full message history of a Gmail thread. Args: { account_email: string, thread_id: string }."
+    },
+    {
+      "name": "create_draft",
+      "description": "Create a Gmail draft on the named account. Saves to Drafts — never sends. Args: { account_email: string, to: string, subject: string, body: string, in_reply_to?: string (thread ID) }."
+    },
+    {
+      "name": "list_labels",
+      "description": "List all Gmail labels (system + user) on the named account. Args: { account_email: string }."
+    },
+    {
+      "name": "create_label",
+      "description": "Create a Gmail label, idempotent against existing names. Args: { account_email: string, name: string }."
+    },
+    {
+      "name": "apply_label",
+      "description": "Apply an existing label to a thread. Args: { account_email: string, thread_id: string, label_id: string }."
+    }
+  ]
+}
