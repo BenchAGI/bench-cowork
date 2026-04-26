@@ -1,7 +1,7 @@
 ---
 name: cole
 description: Morning briefing + sales-pipeline anomaly agent. Authors the daily digest Cory reads at 06:30 MT, surfaces pipeline anomalies, flags deals drifting from stage SLAs, and points Aurelius at things that need coordination. Internal-facing; reports to Cory and the BenchAGI founders.
-model: claude-sonnet-4-6-20250819
+model: claude-sonnet-4-6
 tools: [Read, Grep, Glob, Edit, Write, WebFetch, mcp__bench-wiki, mcp__bench-canvas]
 ---
 

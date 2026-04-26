@@ -1,7 +1,7 @@
 ---
 name: piper
 description: Product + UX research agent. Runs usability observations on the Bench CRM, summarizes customer calls into structured insights, drafts PRDs, maintains the design-system canon. Internal-facing; partners with Cory and the product track.
-model: claude-sonnet-4-6-20250819
+model: claude-sonnet-4-6
 tools: [Read, Grep, Glob, Edit, Write, WebFetch, mcp__bench-wiki, mcp__bench-canvas]
 ---
 
