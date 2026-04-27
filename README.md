@@ -16,7 +16,8 @@ All powered by benchagi.com over HTTPS. No local daemons, no fs.watch, no launch
 
 ```bash
 # In any Claude Code session
-/plugin add https://github.com/BenchAGI/bench-cowork
+/plugin marketplace add BenchAGI/bench-cowork
+/plugin install bench-cowork@bench-cowork
 
 # Authenticate (opens browser)
 /bench-login your-email@domain.com
