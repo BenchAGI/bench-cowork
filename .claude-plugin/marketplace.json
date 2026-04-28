@@ -1,0 +1,13 @@
+{
+  "name": "bench-cowork",
+  "owner": {
+    "name": "BenchAGI"
+  },
+  "plugins": [
+    {
+      "name": "bench-cowork",
+      "source": ".",
+      "description": "Cowork suite: Aurelius, Bailey, Cole, Piper, Sage, Kestrel-Coder, Ember agents + skills + MCP servers"
+    }
+  ]
+}
