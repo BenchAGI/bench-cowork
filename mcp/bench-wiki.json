@@ -54,7 +54,7 @@
     },
     {
       "name": "wiki_draft",
-      "description": "Draft a single canon entry from a conversation or session. Member-auth (Cowork JWT); writes to wikiEntries/{slug} with approvalStatus='draft' for admin review — never auto-approves. Payload is flat (NOT wrapped in an `entries` array like wiki_ingest). Author attribution comes from the auth context; authorUid/authorEmail in the payload are ignored. Tenant is drawn from auth.instanceId server-side; sending `instanceId` in the payload returns 400. Use this tool from the wiki-capture skill for user-driven captures; wiki_ingest is only for the super-admin OpenClaw daemon.",
+      "description": "Draft a single canon entry from a conversation or session. Member-auth (Cowork JWT). PR #815 (Vault-as-source-of-truth): the route returns 410 Gone for `space: 'work'` AND when `space` is omitted, unless `submittedVia: 'mail-classifier'` (server-side mail-to-canon path, super-admin only). The route's historical DEFAULT_SPACE is still 'work' — callers MUST pass `space: 'personal'` explicitly to land in users/{uid}/personalVault/{slug}; relying on a default will 410. Payload is flat (NOT wrapped in an `entries` array like wiki_ingest). Author attribution comes from the auth context; authorUid/authorEmail in the payload are ignored. Tenant is drawn from auth.instanceId server-side; sending `instanceId` in the payload returns 400. Use this tool from the wiki-capture skill for user-driven personal captures; wiki_ingest is the agent path for canonical wikiEntries. New canon should be authored in the Vault and ingested via wiki_ingest, not this draft endpoint.",
       "method": "POST",
       "path": "/wiki/draft",
       "body_schema": {
@@ -62,11 +62,14 @@
         "markdown": "string (required; 1..524288 bytes utf-8)",
         "kind": "canon | synthesis | dream (required; strict subset — no consolidation/protocol/sop at draft tier)",
         "agent": "aurelius | bailey | sage | cole | ember | piper | kestrel-coder | aerie (required)",
-        "rarity": "common | uncommon | rare | epic | legendary (required; reviewer can override at promotion)"
+        "rarity": "common | uncommon | rare | epic | legendary (required; reviewer can override at promotion)",
+        "space": "personal | work (REQUIRED IN PRACTICE — pass 'personal' for member captures; 'work' returns 410 unless submittedVia='mail-classifier'. Omitting the field 410s.)",
+        "submittedVia": "user-draft | mail-classifier (optional; default 'user-draft'. 'mail-classifier' is the only allowed work-canon path and requires super-admin auth.)"
       },
       "response_schema": {
         "slug": "string (server-generated; shape: draft-<epoch>-<8-hex>)",
-        "reviewUrl": "string (relative path to the admin review queue with the slug pre-filled)"
+        "space": "personal | work (echoes the request)",
+        "reviewUrl": "string (relative path to the appropriate review queue with the slug pre-filled. Personal: '/personal/canon/review?slug=...'; mail-classifier work: '/admin/settings/agent-wiki/review?slug=...'.)"
       }
     }
   ]

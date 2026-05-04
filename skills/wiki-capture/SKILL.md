@@ -73,18 +73,20 @@ mcp__bench-wiki__wiki_draft({
   markdown: "<markdown body; see template below>",
   kind: "canon",
   agent: "<agent>",
-  rarity: "<rarity>"
+  rarity: "<rarity>",
+  space: "personal"
 })
 ```
 
 Notes:
-- `title`, `markdown`, `kind`, `agent`, `rarity` are all **required**.
+- `title`, `markdown`, `kind`, `agent`, `rarity`, `space` are all **required**. **Always send `space: "personal"`** for member captures — PR #815 made the route return 410 Gone for `space: "work"` (or omitted) unless `submittedVia: "mail-classifier"` (server-side mail-to-canon, super-admin only). The MCP route's own default is still `"work"` historically, so don't rely on that — pass the field explicitly.
 - `kind` is a strict subset: `canon | synthesis | dream` only (no `consolidation | protocol | sop` at draft tier — those go through super-admin ingest).
 - `agent` must be one of: `aurelius`, `bailey`, `sage`, `cole`, `ember`, `piper`, `kestrel-coder`, `aerie`.
 - **Do not send `instanceId`** in the payload — the server rejects it with a 400 and derives tenant scoping from `auth.instanceId` instead. Entries created by members inside a tenant are automatically scoped to that tenant; BenchAGI-master entries (null instanceId) come from members with no tenant binding.
 - The doc always lands with `approvalStatus: 'draft'` — there's no auto-approval path on this surface. Admin review promotes it.
 - Max 512 KB utf-8 per `markdown`.
 - `authorUid` / `authorEmail` on the payload are ignored; they come from the auth context.
+- New canon should be authored in the Vault and ingested via `wiki_ingest` — this `wiki_draft` path is for personal-vault captures, not work-canon authoring.
 
 ### 5. Body template
 
@@ -106,20 +108,23 @@ Notes:
 
 ### 6. Report the slug back
 
-The `wiki_draft` response looks like:
+The `wiki_draft` response with `space: "personal"` looks like:
 
 ```json
 {
   "slug": "draft-1745280000000-a1b2c3d4",
-  "reviewUrl": "/admin/settings/agent-wiki/review?slug=draft-1745280000000-a1b2c3d4"
+  "space": "personal",
+  "reviewUrl": "/personal/canon/review?slug=draft-1745280000000-a1b2c3d4"
 }
 ```
 
-Read `slug` and `reviewUrl` and tell the user:
+The `reviewUrl` differs by space — personal drafts go to `/personal/canon/review`, mail-classifier work-canon drafts (super-admin only) to `/admin/settings/agent-wiki/review`. The response echoes the `space` field so callers can branch on it.
 
-> Captured as canon draft `<slug>` (rarity: `<rarity>`, agent: `<agent>`). It's queued for admin review at `https://benchagi.com<reviewUrl>` — it won't appear in `/wiki/canon` until a super-admin promotes it.
+Read `slug`, `space`, and `reviewUrl` and tell the user:
 
-Drafts don't auto-approve on this surface (unlike the super-admin ingest path). Surface the review URL so the user knows where to go.
+> Captured as personal canon draft `<slug>` (rarity: `<rarity>`, agent: `<agent>`). It's queued for review at `https://benchagi.com<reviewUrl>` — only you (the author) can see and promote it from your personal vault until you push it into work canon.
+
+Personal-vault drafts don't auto-approve (the auto-approve path is reserved for Vault-ingested `pageType: 'app-page'` entries). Surface the review URL so the user knows where to find it.
 
 ## Edge cases
 
@@ -132,9 +137,9 @@ Drafts don't auto-approve on this surface (unlike the super-admin ingest path). 
 
 - Tier A/B users running in the monorepo can use `scripts/wiki-capture/forward.ts`, which routes by flag:
   - `--pr <N>` → super-admin `/api/v1/wiki/ingest` (X-API-Key, platform canon).
-  - `--title "<...>" --body-file <path>` → cowork-auth `/api/v1/wiki/draft` (the same endpoint this MCP tool hits, just from the script side). Reads `~/.claude/config/bench-cowork.json` for the JWT.
+  - `--title "<...>" --body-file <path>` → cowork-auth `/api/v1/wiki/draft` (the same endpoint this MCP tool hits, just from the script side). Reads `~/.claude/config/bench-cowork.json` for the JWT. Defaults to `space=personal` (PR #815: Vault-as-source-of-truth — work-canon writes via this route are blocked except for the super-admin mail-classifier path).
 - Tier D users (this skill) call `wiki_draft` directly — same endpoint, no monorepo needed. The validation rules and field defaults below are identical between the two paths since they hit the same route.
-- Bulk-ingest path (`wiki_ingest`) lands in the per-user shard `users/{uid}/wikiEntries/{slug}`. Single-capture (`wiki_draft`) lands in platform `wikiEntries/{slug}` with `approvalStatus: 'draft'`. Reviewer explicitly promotes either to approved platform canon.
+- Bulk-ingest path (`wiki_ingest`) lands in the per-user shard `users/{uid}/wikiEntries/{slug}`. Single-capture (`wiki_draft`) lands in **`users/{uid}/personalVault/{slug}`** (PR #815 default; the legacy `wikiEntries/{slug}` write requires `submittedVia: 'mail-classifier'` + super-admin and 410s otherwise). Reviewer explicitly promotes either to approved platform canon via the appropriate review queue.
 - Tier D can't do the `backtrace` rollup (needs repo access); that stays a Tier A/B operator action.
 
 ## Envelope shape vs `forward.ts` (no normalization across surfaces)
@@ -142,7 +147,7 @@ Drafts don't auto-approve on this surface (unlike the super-admin ingest path). 
 `wiki_draft` and `forward.ts` write to the same Firestore collection but **do not share an envelope contract**:
 
 - `forward.ts` (Tier A/B) sends a structured `frontmatter` JSON object on the ingest envelope (camelCase fields like `capturedBy`, `prNumber`, `mergedAt`); the markdown body is plain prose. See `scripts/wiki-capture/lib/markdown-builder.ts` in the monorepo.
-- `wiki_draft` (this skill) accepts only `{title, markdown, kind, agent, rarity}` — **no `frontmatter` field**. The server rejects unknown fields. Whatever metadata the entry needs (PR refs, dates, sources, verbatim quotes) goes inline in the markdown body.
+- `wiki_draft` (this skill) accepts `{title, markdown, kind, agent, rarity, space, submittedVia?}` — **no `frontmatter` field**. The server rejects unknown fields. Whatever metadata the entry needs (PR refs, dates, sources, verbatim quotes) goes inline in the markdown body. `space` defaults to `'personal'` (PR #815) — pass `space: 'work'` only when also passing `submittedVia: 'mail-classifier'` from the super-admin server-side mail pipeline.
 
 **Don't try to reformat existing drafts to match `forward.ts`.** The `/api/v1/wiki/draft` route is POST-only; no PUT/PATCH endpoint exists for content edits. Agent voices differ — Aurelius writes legal-track summaries with verbatim quotes; Kestrel-Coder writes structured PR captures with H2 sections. Both are valid canon at this tier. Reviewers normalize via the admin UI on promotion; mechanical reformatting is not a goal.
 
