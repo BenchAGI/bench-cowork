@@ -58,6 +58,7 @@ After this onboarding, the user will likely want to:
 - **Draft a follow-up** → **Aurelius** (via `aurelius-email`)
 - **Review a PR** → **Kestrel-Coder** (with `review` skill)
 - **Understand pipeline state** → **Cole**
+- **Customize the app or workspace** → use `customize-experience` and link `/app/wiki/customize-your-experience`
 
 ## Adaptive notes
 
