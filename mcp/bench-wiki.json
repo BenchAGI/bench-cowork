@@ -41,8 +41,18 @@
       "response_schema": {
         "ingested": "number (count of created+updated entries)",
         "totalReceived": "number",
-        "results": "Array<{ slug, action: 'created'|'updated'|'unchanged'|'skipped' }>",
+        "results": "Array<{ slug, action: 'created'|'updated'|'unchanged'|'skipped', adminReviewUrl?: string }>",
         "parseErrors": "Array<{ index, error }> (optional; present only when any entries failed validation)"
+      }
+    },
+    {
+      "name": "wiki_list_my_drafts",
+      "description": "List the authenticated caller's tenant-shard wiki entries, including draft/approved/rejected lifecycle status and a deep link to the Review Queue filtered to the source instance. Tenant-bound users only see their own instance; super-admins may pass sourceInstanceId to filter a partner shard.",
+      "method": "GET",
+      "path": "/wiki/my-drafts",
+      "query_params": ["sourceInstanceId"],
+      "response_schema": {
+        "drafts": "Array<{ slug, title, approvalStatus: 'draft'|'approved'|'rejected', kind, agent, syncedAt, adminReviewUrl }>"
       }
     },
     {
