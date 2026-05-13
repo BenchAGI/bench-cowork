@@ -44,7 +44,8 @@
         "mcp/bench-wiki.json",
         "mcp/bench-canvas.json",
         "mcp/bench-slack.json",
-        "mcp/bench-mail.json"
+        "mcp/bench-mail.json",
+        "mcp/bench-chassis.json"
       ],
       "hooks": [
         "hooks/pre-commit-canvas-update.sh"

@@ -1,0 +1,130 @@
+{
+  "name": "bench-chassis",
+  "description": "Read BenchAGI Chassis capability, config, health, manifest, and harness state through existing /api/v1/chassis endpoints. Calls use Chassis API keys via X-API-Key; cowork bearer tokens are not valid for these routes.",
+  "env": {
+    "BENCH_CHASSIS_API_KEY": {
+      "description": "Chassis API key in bench_<instanceId>_<secret> format.",
+      "required": true,
+      "missing_message": "BENCH_CHASSIS_API_KEY is required for bench-chassis MCP calls. Set it to a Chassis API key in bench_<instanceId>_<secret> format."
+    },
+    "BENCH_API_BASE": {
+      "description": "Base URL for Bench API.",
+      "default": "https://benchagi.com/api/v1"
+    }
+  },
+  "transport": {
+    "type": "http",
+    "base": "${BENCH_API_BASE}",
+    "default_base": "https://benchagi.com/api/v1",
+    "auth": {
+      "type": "api_key",
+      "header": "X-API-Key",
+      "token_env": "BENCH_CHASSIS_API_KEY",
+      "required": true,
+      "missing_message": "BENCH_CHASSIS_API_KEY is required for bench-chassis MCP calls. Set it to a Chassis API key in bench_<instanceId>_<secret> format.",
+      "invalid_bearer_message": "Looks like you passed a Bearer token. The Chassis MCP needs BENCH_CHASSIS_API_KEY (format bench_<instanceId>_<secret>). Cowork tokens are for /api/v1/cowork/*, not /chassis/*."
+    },
+    "headers": {
+      "X-API-Key": "${BENCH_CHASSIS_API_KEY}",
+      "Content-Type": "application/json"
+    }
+  },
+  "tools": [
+    {
+      "name": "chassis_capabilities",
+      "description": "Dynamic capability registry for agent introspection.",
+      "method": "GET",
+      "path": "/chassis/capabilities",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "query_params": []
+    },
+    {
+      "name": "chassis_openapi",
+      "description": "OpenAPI spec for all Chassis routes.",
+      "method": "GET",
+      "path": "/chassis/openapi",
+      "auth_required": false,
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "query_params": []
+    },
+    {
+      "name": "chassis_config_get",
+      "description": "Read instance Chassis config.",
+      "method": "GET",
+      "path": "/chassis/config",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "query_params": []
+    },
+    {
+      "name": "chassis_health",
+      "description": "Health probe.",
+      "method": "GET",
+      "path": "/chassis/health",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "chassisId": {
+            "type": "string",
+            "description": "Optional chassis deployment ID filter."
+          },
+          "detailed": {
+            "type": "boolean",
+            "description": "Include recent heartbeat detail when true."
+          }
+        },
+        "additionalProperties": false
+      },
+      "query_params": ["chassisId", "detailed"]
+    },
+    {
+      "name": "chassis_manifest_get",
+      "description": "Read manifest.",
+      "method": "GET",
+      "path": "/chassis/manifest",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "validate": {
+            "type": "boolean",
+            "description": "Include manifest validation when true."
+          },
+          "diff": {
+            "type": "boolean",
+            "description": "Include diff against stored manifest when true."
+          }
+        },
+        "additionalProperties": false
+      },
+      "query_params": ["validate", "diff"]
+    },
+    {
+      "name": "chassis_harness_pull",
+      "description": "Pull harness state.",
+      "method": "GET",
+      "path": "/chassis/harness/pull",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "channel": {
+            "type": "string",
+            "description": "Optional admin override for the resolved harness channel."
+          }
+        },
+        "additionalProperties": false
+      },
+      "query_params": ["channel"]
+    }
+  ]
+}
