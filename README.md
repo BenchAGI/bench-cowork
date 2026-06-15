@@ -5,9 +5,10 @@
 ## What this gives you
 
 - **7 agent personalities** as Claude Code subagents: Aurelius, Ember, Bailey, Cole, Piper, Kestrel-Coder, Sage
-- **Skills**: `aurelius-email`, `triage-mail`, `wiki-capture`, `hammer-anvil`, `simplify`, `customize-experience`, `review`, `security-review`, `bench-onboarding`
-- **Slash commands**: `/aurelius`, `/ember`, `/bailey`, `/cole`, `/piper`, `/sage`, `/wiki-capture`, `/bench-login`
-- **MCP servers**: `bench-wiki` (canon read/write), `bench-canvas` (tile updates + drift), `bench-slack` (optional), `bench-mail` (multi-account Gmail triage)
+- **Skills**: `aurelius-email`, `triage-mail`, `wiki-capture`, `hammer-anvil`, `simplify`, `customize-experience`, `review`, `security-review`, `bench-onboarding`, `forge-report`
+- **Slash commands**: `/aurelius`, `/ember`, `/bailey`, `/cole`, `/piper`, `/sage`, `/wiki-capture`, `/bench-login`, `/forge-report`
+- **MCP servers**: `bench-wiki` (canon read/write), `bench-canvas` (tile updates + drift), `bench-slack` (optional), `bench-mail` (multi-account Gmail triage), `bench-chassis` (API-key tenant bridge), `bench-forge` (diagnostics → Forge tickets)
+- **Draft manifest**: `bench-excalidraw` remains in `mcp/` but is not registered until `/excalidraw/*` routes land
 - **Hook**: Amendment 10 enforcement — PRs touching canvas-tracked code paths must update the tile
 
 All powered by benchagi.com over HTTPS. No local daemons, no fs.watch, no launchd.
@@ -51,6 +52,30 @@ openclaw init --instance-id <your-instance>
 # Plugin now hybrid-routes automatically
 ```
 
+## Cowork MCP vs `@openclaw/slack`
+
+These are **complementary, not competing**. `@openclaw/slack` is the gateway-side Slack
+channel plugin — it lives in an OpenClaw install (Tier A/B) and gives the *gateway* a
+Slack presence. The cowork MCP servers here (`bench-slack`, `bench-wiki`, `bench-forge`, …)
+are the **intended tenant route**: a Claude Code session authenticated with a cowork JWT
+talks to benchagi.com, which enforces tenant binding (`auth.instanceId`), billing, and
+per-tenant bot tokens server-side. Tenants without an OpenClaw install — or without a
+GitHub/Slack account of their own — get the same capabilities through this path. If you
+run both tiers, keep both: the gateway plugin handles channel traffic, the cowork MCP
+handles session-driven asks.
+
+### The generic HTTP bridge + token auto-refresh
+
+Registered HTTP manifests in `mcp/` are served by **one** generic, dependency-free stdio MCP
+server: `servers/bench-http-bridge.js <manifest.json>`. It registers the manifest's
+tools, re-reads `~/.claude/config/bench-cowork.json` on every call (so a fresh
+`/bench-login` is picked up without a restart), and on a `401 COWORK_BAD_TOKEN` it
+auto-refreshes the cowork JWT via `POST /cowork/auth/refresh`, persists the new token
+atomically (tmp file + rename, `chmod 600`), and retries the call once — no more
+weekly bridge death when the 7-day token expires. Refresh exhaustion
+(`COWORK_REFRESH_EXPIRED` / `COWORK_REFRESH_CHAIN_TOO_OLD`) means re-running
+`/bench-login`.
+
 ## What this doesn't do
 
 - **Local daemons** (gateway, fs.watch, wiki-mirror, dreaming crons) — OpenClaw only
@@ -71,21 +96,22 @@ tools/bench-cowork/
   agents/                # Subagent .md files (name, description, system prompt)
   commands/              # Slash command .md files
   mcp/                   # MCP server manifests (HTTP clients)
+  servers/               # Generic stdio bridge that serves the HTTP manifests
   hooks/                 # Pre/post hook scripts
 ```
 
 ## Status
 
-**Shipped 2026-04-20 (Cycle 6)** — 7 agents + 9 skills + 4 MCP servers + `/bench-login` auth flow + Amendment-10 pre-commit hook. Rate-limiter is stubbed pending Cycle 7 wire-up.
+**Shipped 2026-04-20 (Cycle 6)** — 7 agents + 10 skills + 6 registered MCP servers + `/bench-login` auth flow + Amendment-10 pre-commit hook. Rate-limiter is stubbed pending Cycle 7 wire-up.
 
 | Surface | Count | Status |
 |---|---|---|
 | Agents | 7 | ✅ Aurelius, Ember, Bailey, Cole, Piper, Kestrel-Coder, Sage |
-| Skills | 9 | ✅ aurelius-email, triage-mail, wiki-capture, hammer-anvil, simplify, customize-experience, bench-onboarding, review, security-review |
-| Slash commands | 9 | ✅ `/aurelius`, `/ember`, `/bailey`, `/cole`, `/piper`, `/sage`, `/kestrel-coder`, `/wiki-capture`, `/bench-login` |
-| MCP servers | 4 | ✅ bench-wiki, bench-canvas, bench-slack, bench-mail (bench-excalidraw draft) |
+| Skills | 10 | ✅ aurelius-email, triage-mail, wiki-capture, hammer-anvil, simplify, customize-experience, bench-onboarding, review, security-review, forge-report |
+| Slash commands | 10 | ✅ `/aurelius`, `/ember`, `/bailey`, `/cole`, `/piper`, `/sage`, `/kestrel-coder`, `/wiki-capture`, `/bench-login`, `/forge-report` |
+| MCP servers | 6 | ✅ bench-wiki, bench-canvas, bench-slack, bench-mail, bench-chassis, bench-forge |
 | Hooks | 1 | ✅ pre-commit canvas-update nudge (Amendment 10) |
-| Cloud endpoints | 7 | ✅ `/api/v1/cowork/{auth,canvas/tile,canvas/drift,canvas/edges,slack/sessions,slack/sessions/send,slack/history}` |
+| Cloud endpoints | 9 | ✅ `/api/v1/cowork/{auth,auth/refresh,canvas/tile,canvas/drift,canvas/edges,slack/sessions,slack/sessions/send,slack/history,forge/ticket}` |
 
 ### Known limits (deferred to Cycle 7)
 

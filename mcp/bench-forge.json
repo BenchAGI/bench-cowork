@@ -1,0 +1,45 @@
+{
+  "name": "bench-forge",
+  "description": "File harness diagnostics as Forge tickets from a tenant Claude Code session — no GitHub account needed on the tenant side. Tickets land in Firestore, dedupe by content hash, and sync server-side to a GitHub issue in the Forge repo. All calls carry the user's Bench UID; tenant binding comes from auth.instanceId server-side.",
+  "transport": {
+    "type": "http",
+    "base": "${bench_api_base}",
+    "auth": {
+      "type": "bearer",
+      "token_env": "BENCH_COWORK_TOKEN"
+    }
+  },
+  "tools": [
+    {
+      "name": "forge_submit_diagnostics",
+      "description": "Submit a diagnostics report as a Forge ticket. First submit returns 201 { ticketId, status: 'queued' }; an identical re-submit by the same user dedupes and returns 200 with the existing { ticketId, status, issueUrl? } — never a second GitHub issue. Rate limit: 10 tickets per user per 24h.",
+      "method": "POST",
+      "path": "/cowork/forge/ticket",
+      "body_schema": {
+        "severity": "sev-1 | sev-2 | sev-3 | question",
+        "subject": "string (short, scannable summary — becomes the GitHub issue title)",
+        "body": "string (markdown diagnostics/runbook body; max 120 KB)",
+        "reporterContext": "object (optional; machine + CLI/gateway versions + doctor checks, e.g. { machine, benchCliVersion, gatewayVersion, doctorChecks })"
+      },
+      "response_schema": {
+        "ticketId": "string",
+        "status": "'queued' on create (201); existing ticket status on duplicate (200)",
+        "issueUrl": "string (optional; present on duplicates once the GitHub sync has landed)"
+      }
+    },
+    {
+      "name": "forge_ticket_status",
+      "description": "Poll a submitted ticket's GitHub sync status. Owner-only — callers can only read tickets they filed. syncStatus moves pending → synced (issueNumber + issueUrl set) or pending → failed (failureReason set).",
+      "method": "GET",
+      "path": "/cowork/forge/ticket",
+      "query_params": ["id"],
+      "response_schema": {
+        "ticketId": "string",
+        "syncStatus": "pending | synced | failed",
+        "issueNumber": "number (optional; set once synced)",
+        "issueUrl": "string (optional; set once synced)",
+        "failureReason": "string (optional; set when failed)"
+      }
+    }
+  ]
+}
