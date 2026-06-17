@@ -7,7 +7,7 @@
 - **7 agent personalities** as Claude Code subagents: Aurelius, Ember, Bailey, Cole, Piper, Kestrel-Coder, Sage
 - **Skills**: `aurelius-email`, `triage-mail`, `wiki-capture`, `hammer-anvil`, `simplify`, `customize-experience`, `review`, `security-review`, `bench-onboarding`, `forge-report`
 - **Slash commands**: `/aurelius`, `/ember`, `/bailey`, `/cole`, `/piper`, `/sage`, `/wiki-capture`, `/bench-login`, `/forge-report`
-- **MCP servers**: `bench-wiki` (canon read/write), `bench-canvas` (tile updates + drift), `bench-slack` (optional), `bench-mail` (multi-account Gmail triage), `bench-chassis` (API-key tenant bridge), `bench-forge` (diagnostics → Forge tickets)
+- **MCP servers**: `bench-wiki` (canon read/write), `bench-canvas` (tile updates + drift), `bench-slack` (optional), `bench-mail` (multi-account Gmail triage), `bench-chassis` (API-key tenant bridge), `bench-deals` (deal + pipeline tools), `bench-forge` (diagnostics → Forge tickets)
 - **Draft manifest**: `bench-excalidraw` remains in `mcp/` but is not registered until `/excalidraw/*` routes land
 - **Hook**: Amendment 10 enforcement — PRs touching canvas-tracked code paths must update the tile
 
@@ -102,14 +102,14 @@ tools/bench-cowork/
 
 ## Status
 
-**Shipped 2026-04-20 (Cycle 6)** — 7 agents + 10 skills + 6 registered MCP servers + `/bench-login` auth flow + Amendment-10 pre-commit hook. Rate-limiter is stubbed pending Cycle 7 wire-up.
+**Shipped 2026-04-20 (Cycle 6)** — 7 agents + 10 skills + 7 registered MCP servers + `/bench-login` auth flow + Amendment-10 pre-commit hook. Rate-limiter is stubbed pending Cycle 7 wire-up.
 
 | Surface | Count | Status |
 |---|---|---|
 | Agents | 7 | ✅ Aurelius, Ember, Bailey, Cole, Piper, Kestrel-Coder, Sage |
 | Skills | 10 | ✅ aurelius-email, triage-mail, wiki-capture, hammer-anvil, simplify, customize-experience, bench-onboarding, review, security-review, forge-report |
 | Slash commands | 10 | ✅ `/aurelius`, `/ember`, `/bailey`, `/cole`, `/piper`, `/sage`, `/kestrel-coder`, `/wiki-capture`, `/bench-login`, `/forge-report` |
-| MCP servers | 6 | ✅ bench-wiki, bench-canvas, bench-slack, bench-mail, bench-chassis, bench-forge |
+| MCP servers | 7 | ✅ bench-wiki, bench-canvas, bench-slack, bench-mail, bench-chassis, bench-deals, bench-forge |
 | Hooks | 1 | ✅ pre-commit canvas-update nudge (Amendment 10) |
 | Cloud endpoints | 9 | ✅ `/api/v1/cowork/{auth,auth/refresh,canvas/tile,canvas/drift,canvas/edges,slack/sessions,slack/sessions/send,slack/history,forge/ticket}` |
 

@@ -1,0 +1,109 @@
+{
+  "name": "bench-deals",
+  "description": "Read and create BenchAGI deals and read the pipeline summary through the existing /api/v1/chassis deal routes. Calls use Chassis API keys via X-API-Key; cowork bearer tokens are not valid for these routes. The tenant is vended by the key — instanceId is derived server-side and any client-supplied instanceId is ignored.",
+  "env": {
+    "BENCH_CHASSIS_API_KEY": {
+      "description": "Chassis API key in bench_<instanceId>_<secret> format.",
+      "required": true,
+      "missing_message": "BENCH_CHASSIS_API_KEY is required for bench-deals MCP calls. Set it to a Chassis API key in bench_<instanceId>_<secret> format."
+    },
+    "BENCH_API_BASE": {
+      "description": "Base URL for Bench API.",
+      "default": "https://benchagi.com/api/v1"
+    }
+  },
+  "transport": {
+    "type": "http",
+    "base": "${BENCH_API_BASE}",
+    "default_base": "https://benchagi.com/api/v1",
+    "auth": {
+      "type": "api_key",
+      "header": "X-API-Key",
+      "token_env": "BENCH_CHASSIS_API_KEY",
+      "required": true,
+      "missing_message": "BENCH_CHASSIS_API_KEY is required for bench-deals MCP calls. Set it to a Chassis API key in bench_<instanceId>_<secret> format.",
+      "invalid_bearer_message": "Looks like you passed a Bearer token. The deals MCP needs BENCH_CHASSIS_API_KEY (format bench_<instanceId>_<secret>). Cowork tokens are for /api/v1/cowork/*, not /chassis/*."
+    },
+    "headers": {
+      "X-API-Key": "${BENCH_CHASSIS_API_KEY}",
+      "Content-Type": "application/json"
+    }
+  },
+  "tools": [
+    {
+      "name": "deals_list",
+      "description": "List deals for the authenticated instance. Optional filters: status (comma-separated stage ids, max 10), assignedTo (user id), limit (default 50, max 200). Requires scope deals:read.",
+      "method": "GET",
+      "path": "/chassis/deals",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "Comma-separated deal stage ids, e.g. 'estimate,job_approved'. Stages: introduction, inspection, claim_session, adjuster_meeting, estimate, job_approved, installation_handoff, closed_won, closed_lost, no_damage."
+          },
+          "assignedTo": {
+            "type": "string",
+            "description": "Return only deals where this user id is in assignedTo."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Max deals to return (default 50, capped at 200)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "query_params": ["status", "assignedTo", "limit"]
+    },
+    {
+      "name": "deal_get",
+      "description": "Fetch a single deal by id (returns 404 if it is not in this instance). Requires scope deals:read.",
+      "method": "GET",
+      "path": "/chassis/deals/{id}",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "description": "Deal id." }
+        },
+        "required": ["id"],
+        "additionalProperties": false
+      },
+      "path_params": ["id"]
+    },
+    {
+      "name": "deal_create",
+      "description": "Create a deal for the authenticated instance. One of customerName or title is required. The tenant is server-derived from the key (any instanceId in the body is ignored). Requires scope deals:write.",
+      "method": "POST",
+      "path": "/chassis/deals",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "customerName": { "type": "string", "description": "Customer / account name (required if title is absent)." },
+          "title": { "type": "string", "description": "Deal title (required if customerName is absent)." },
+          "estimatedValue": { "type": "number", "description": "Estimated deal value. Falls back to `value` if omitted." },
+          "value": { "type": "number", "description": "Alias for estimatedValue." },
+          "currency": { "type": "string", "description": "ISO currency code. Default USD." },
+          "status": { "type": "string", "description": "Pipeline stage id. Default 'introduction'." },
+          "propertyAddress": { "type": "string" },
+          "customerEmail": { "type": "string" },
+          "customerPhone": { "type": "string" },
+          "contactId": { "type": "string" },
+          "dealType": { "type": "string", "enum": ["retail", "insurance"], "description": "Default retail." },
+          "tradeTags": { "type": "array", "items": { "type": "string" } },
+          "assignedTo": { "type": "array", "items": { "type": "string" }, "description": "User ids to assign." },
+          "notes": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "body": "json"
+    },
+    {
+      "name": "pipeline_summary",
+      "description": "Pipeline stage summary for the authenticated instance: per-stage count, totalValue, and probability-weightedValue, plus grand totals. Requires scope pipeline:read (falls back to deals:read).",
+      "method": "GET",
+      "path": "/chassis/pipeline",
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+      "query_params": []
+    }
+  ]
+}

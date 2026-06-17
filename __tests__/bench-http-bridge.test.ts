@@ -9,6 +9,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const bridgePath = resolve(__dirname, '../servers/bench-http-bridge.js');
 const forgeManifestPath = resolve(__dirname, '../mcp/bench-forge.json');
+const dealsManifestPath = resolve(__dirname, '../mcp/bench-deals.json');
 
 const children: ChildProcessWithoutNullStreams[] = [];
 const tempDirs: string[] = [];
@@ -28,14 +29,20 @@ function makeTempDir(): string {
   return dir;
 }
 
-function spawnBridge(configPath: string) {
-  const child = spawn(process.execPath, [bridgePath, forgeManifestPath], {
+function spawnBridge(
+  configPath: string,
+  manifestPath: string = forgeManifestPath,
+  env: Record<string, string | undefined> = {},
+) {
+  const child = spawn(process.execPath, [bridgePath, manifestPath], {
     env: {
       ...process.env,
+      ...env,
       BENCH_COWORK_CONFIG: configPath,
     },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
+
   children.push(child);
 
   const messages: Array<Record<string, unknown>> = [];
@@ -111,6 +118,104 @@ describe('bench-http-bridge', () => {
     expect(
       list.tools.find((tool) => tool.name === 'forge_submit_diagnostics')?.inputSchema.required,
     ).toEqual(['severity', 'subject', 'body']);
+  });
+
+  it('substitutes path params and forwards JSON bodies for API-key manifests', async () => {
+    const dir = makeTempDir();
+    const configPath = resolve(dir, 'bench-cowork.json');
+
+    const requests: Array<{ method: string; pathname: string; body: unknown }> = [];
+    const server = createServer(async (req, res) => {
+      const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+      const bodyText = await readBody(req);
+      const body = bodyText ? JSON.parse(bodyText) : null;
+      requests.push({ method: req.method ?? '', pathname: url.pathname, body });
+
+      expect(req.headers['x-api-key']).toBe('bench_test_secret');
+
+      if (req.method === 'GET' && url.pathname === '/api/v1/chassis/deals/deal%201%2F2') {
+        json(res, 200, { id: 'deal 1/2', ok: true });
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/api/v1/chassis/deals') {
+        json(res, 201, { id: 'new-deal', received: body });
+        return;
+      }
+
+      json(res, 404, { error: 'not found' });
+    });
+
+    await new Promise<void>((resolveListen) => server.listen(0, '127.0.0.1', resolveListen));
+    try {
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('server did not bind to a port');
+      writeConfig(configPath, {
+        bench_api_base: `http://127.0.0.1:${address.port}/api/v1`,
+      });
+
+      const bridge = spawnBridge(configPath, dealsManifestPath, {
+        BENCH_CHASSIS_API_KEY: 'bench_test_secret',
+      });
+      bridge.send({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: {
+          name: 'deal_get',
+          arguments: { id: 'deal 1/2' },
+        },
+      });
+      bridge.send({
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'tools/call',
+        params: {
+          name: 'deal_create',
+          arguments: {
+            customerName: 'Briggs Roofing',
+            title: 'Briggs reroof',
+            estimatedValue: 42000,
+          },
+        },
+      });
+
+      const messages = await bridge.waitForMessageCount(2);
+      const getResult = messages.find((message) => message.id === 1)?.result as {
+        content: Array<{ text: string }>;
+        isError?: boolean;
+      };
+      const createResult = messages.find((message) => message.id === 2)?.result as {
+        content: Array<{ text: string }>;
+        isError?: boolean;
+      };
+
+      expect(getResult.isError).not.toBe(true);
+      expect(createResult.isError).not.toBe(true);
+      expect(JSON.parse(getResult.content[0].text)).toEqual({ id: 'deal 1/2', ok: true });
+      expect(JSON.parse(createResult.content[0].text)).toMatchObject({
+        id: 'new-deal',
+        received: {
+          customerName: 'Briggs Roofing',
+          title: 'Briggs reroof',
+          estimatedValue: 42000,
+        },
+      });
+      expect(requests).toEqual([
+        { method: 'GET', pathname: '/api/v1/chassis/deals/deal%201%2F2', body: null },
+        {
+          method: 'POST',
+          pathname: '/api/v1/chassis/deals',
+          body: {
+            customerName: 'Briggs Roofing',
+            title: 'Briggs reroof',
+            estimatedValue: 42000,
+          },
+        },
+      ]);
+    } finally {
+      await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+    }
   });
 
   it('refreshes one stale cowork token for concurrent calls, persists it, and retries', async () => {

@@ -103,8 +103,29 @@ function persistToken(token, expiresInSeconds) {
 
 // --- HTTP --------------------------------------------------------------------
 
+function buildPath(tool, args) {
+  let resolvedPath = tool.path;
+  const pathKeys = Array.isArray(tool.path_params) ? tool.path_params : [];
+  for (const key of pathKeys) {
+    const value = args[key];
+    if (value == null || value === '') {
+      throw new Error(`Missing required path parameter "${key}"`);
+    }
+    resolvedPath = resolvedPath.replace(
+      new RegExp(`\\{${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\}`, 'g'),
+      encodeURIComponent(String(value))
+    );
+  }
+  const unresolved = resolvedPath.match(/\{([^}]+)\}/);
+  if (unresolved) {
+    throw new Error(`Missing path parameter "${unresolved[1]}"`);
+  }
+  return resolvedPath;
+}
+
 async function httpCall(tool, args, headers, base) {
-  const url = new URL(base + tool.path);
+  const pathKeys = Array.isArray(tool.path_params) ? tool.path_params : [];
+  const url = new URL(base + buildPath(tool, args));
   const queryKeys = Array.isArray(tool.query_params) ? tool.query_params : [];
   for (const key of queryKeys) {
     if (args[key] != null) url.searchParams.set(key, String(args[key]));
@@ -114,7 +135,7 @@ async function httpCall(tool, args, headers, base) {
   if (method !== 'GET' && method !== 'HEAD') {
     const body = {};
     for (const [key, value] of Object.entries(args)) {
-      if (!queryKeys.includes(key)) body[key] = value;
+      if (!queryKeys.includes(key) && !pathKeys.includes(key)) body[key] = value;
     }
     init.headers['Content-Type'] = 'application/json';
     init.body = JSON.stringify(body);
