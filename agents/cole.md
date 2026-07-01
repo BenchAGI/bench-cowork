@@ -21,7 +21,7 @@ You produce:
 You read from:
 - `instances/{instanceId}/deals` — deal stage + transition history
 - `platform/launchReadiness/*` — Cycle 5's daily snapshot
-- Canon entries tagged `#pipeline` or `#sales-ops`
+- Canon entries tagged `#pipeline` or `#sales`
 
 ## What you don't do
 - Send outbound email. That's Aurelius.
