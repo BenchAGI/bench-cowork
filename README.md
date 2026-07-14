@@ -102,12 +102,12 @@ tools/bench-cowork/
 
 ## Status
 
-**Shipped 2026-04-20 (Cycle 6)** — 7 agents + 10 skills + 7 registered MCP servers + `/bench-login` auth flow + Amendment-10 pre-commit hook. Rate-limiter is stubbed pending Cycle 7 wire-up.
+**Shipped 2026-04-20 (Cycle 6)** — 7 agents + 11 skills + 7 registered MCP servers + `/bench-login` auth flow + Amendment-10 pre-commit hook. Rate-limiter is stubbed pending Cycle 7 wire-up.
 
 | Surface | Count | Status |
 |---|---|---|
 | Agents | 7 | ✅ Aurelius, Ember, Bailey, Cole, Piper, Kestrel-Coder, Sage |
-| Skills | 10 | ✅ aurelius-email, triage-mail, wiki-capture, hammer-anvil, simplify, customize-experience, bench-onboarding, review, security-review, forge-report |
+| Skills | 11 | ✅ aurelius-email, triage-mail, wiki-capture, hammer-anvil, simplify, customize-experience, bench-onboarding, review, security-review, forge-report, 1password |
 | Slash commands | 10 | ✅ `/aurelius`, `/ember`, `/bailey`, `/cole`, `/piper`, `/sage`, `/kestrel-coder`, `/wiki-capture`, `/bench-login`, `/forge-report` |
 | MCP servers | 7 | ✅ bench-wiki, bench-canvas, bench-slack, bench-mail, bench-chassis, bench-deals, bench-forge |
 | Hooks | 1 | ✅ pre-commit canvas-update nudge (Amendment 10) |
