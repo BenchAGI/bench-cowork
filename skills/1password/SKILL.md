@@ -51,6 +51,9 @@ op read 'op://<vault>/<item>/<field>'          # THE read primitive — one fiel
 
 ## Prerequisites
 
+- **Headless harness:** inject a vault-limited 1Password service-account token as
+  `OP_SERVICE_ACCOUNT_TOKEN` through the supervisor's secret channel; never commit,
+  print, or persist the token, and do not expect desktop biometric integration.
 - **Desktop-app integration must be ON**: 1Password app → Settings → Developer →
   enable **"Integrate with 1Password CLI"**. Without it, every `op` call fails to
   authenticate no matter what the CLI does.
@@ -62,7 +65,7 @@ op read 'op://<vault>/<item>/<field>'          # THE read primitive — one fiel
 
 | Symptom | Fix |
 |---|---|
-| `op: command not found` | `brew install --cask 1password-cli` (a cask, not a formula — installs `/opt/homebrew/bin/op`). HaaS boxes get it by default via `scripts/harness-walled-bootstrap.sh`. |
+| `op: command not found` | `brew install --cask 1password-cli` (a cask, not a formula). HaaS boxes install it in `/Users/benchharness/homebrew/bin/op` and pin `FORGE_OP_BIN` via `scripts/harness-walled-bootstrap.sh`; system Homebrew commonly uses `/opt/homebrew/bin/op`. |
 | `op` hangs, then times out | A biometric prompt is waiting in the desktop app — have the user approve it. |
 | "could not connect to the 1Password app" / auth errors | Desktop app not running, or Settings → Developer → "Integrate with 1Password CLI" is off. Start the app and enable the toggle. |
 | Item/vault not found | `op vault list` then `op item list --vault '<vault>'` to confirm exact names; names with spaces need quotes. |
