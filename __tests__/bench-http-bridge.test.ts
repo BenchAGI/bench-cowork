@@ -2,8 +2,11 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import {
   chmodSync,
-  lstatSync,
+  closeSync,
+  constants,
+  fstatSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   rmSync,
   statSync,
@@ -93,6 +96,22 @@ function spawnBridge(
 
 function writeConfig(path: string, config: Record<string, unknown>) {
   writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+}
+
+function readPrivateConfig(configPath: string): Record<string, unknown> {
+  const descriptor = openSync(
+    configPath,
+    constants.O_RDONLY | constants.O_NOFOLLOW,
+  );
+  try {
+    const entry = fstatSync(descriptor);
+    expect(entry.isFile()).toBe(true);
+    expect(entry.nlink).toBe(1);
+    expect(entry.mode & 0o777).toBe(0o600);
+    return JSON.parse(readFileSync(descriptor, 'utf8')) as Record<string, unknown>;
+  } finally {
+    closeSync(descriptor);
+  }
 }
 
 async function readBody(req: IncomingMessage): Promise<string> {
@@ -370,7 +389,7 @@ describe('bench-http-bridge', () => {
       expect(refreshCount).toBe(1);
       expect(submitAuthHeaders.filter((header) => header === 'Bearer stale-token')).toHaveLength(2);
       expect(submitAuthHeaders.filter((header) => header === 'Bearer fresh-token')).toHaveLength(2);
-      expect(JSON.parse(readFileSync(configPath, 'utf8')).bench_cowork_token).toBe('fresh-token');
+      expect(readPrivateConfig(configPath).bench_cowork_token).toBe('fresh-token');
       expect(statSync(dirname(configPath)).mode & 0o777).toBe(0o700);
       expect(statSync(configPath).mode & 0o777).toBe(0o600);
     } finally {
@@ -378,7 +397,7 @@ describe('bench-http-bridge', () => {
     }
   });
 
-  it('refuses a config symlink that appears while a stale token is refreshed', async () => {
+  it('replaces a config symlink that appears while a stale token is refreshed', async () => {
     const dir = makeTempDir();
     const configPath = resolve(dir, 'bench-cowork.json');
     const protectedPath = resolve(dir, 'protected.json');
@@ -388,9 +407,19 @@ describe('bench-http-bridge', () => {
     const server = createServer(async (req, res) => {
       const url = new URL(req.url ?? '/', 'http://127.0.0.1');
       if (req.method === 'POST' && url.pathname === '/api/v1/cowork/forge/ticket') {
-        expect(req.headers.authorization).toBe('Bearer stale-token');
-        rmSync(configPath);
-        symlinkSync(protectedPath, configPath);
+        if (req.headers.authorization === 'Bearer stale-token') {
+          rmSync(configPath);
+          symlinkSync(protectedPath, configPath);
+          json(res, 401, { code: 'COWORK_BAD_TOKEN' });
+          return;
+        }
+        if (req.headers.authorization === 'Bearer fresh-token') {
+          json(res, 201, {
+            ticketId: 'fgt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            status: 'queued',
+          });
+          return;
+        }
         json(res, 401, { code: 'COWORK_BAD_TOKEN' });
         return;
       }
@@ -424,9 +453,12 @@ describe('bench-http-bridge', () => {
 
       const [message] = await bridge.waitForMessageCount(1);
       const result = message.result as { content: Array<{ text: string }>; isError?: boolean };
-      expect(result.isError).toBe(true);
-      expect(result.content[0].text).toContain('must not be a symbolic link');
-      expect(lstatSync(configPath).isSymbolicLink()).toBe(true);
+      expect(result.isError).not.toBe(true);
+      expect(JSON.parse(result.content[0].text)).toMatchObject({
+        ticketId: 'fgt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+        status: 'queued',
+      });
+      expect(readPrivateConfig(configPath).bench_cowork_token).toBe('fresh-token');
       expect(JSON.parse(readFileSync(protectedPath, 'utf8')).bench_cowork_token).toBe('protected-token');
     } finally {
       await new Promise<void>((resolveClose) => server.close(() => resolveClose()));

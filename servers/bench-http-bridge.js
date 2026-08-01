@@ -72,13 +72,25 @@ function configPath() {
 }
 
 function readConfig() {
+  let descriptor = null;
   try {
     const file = configPath();
-    const existing = fs.lstatSync(file);
-    if (existing.isSymbolicLink() || !existing.isFile() || existing.nlink !== 1) return {};
-    return JSON.parse(fs.readFileSync(file, 'utf8'));
+    descriptor = fs.openSync(
+      file,
+      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | (fs.constants.O_NONBLOCK || 0),
+    );
+    const entry = fs.fstatSync(descriptor);
+    if (!entry.isFile() || entry.nlink !== 1) return {};
+    return JSON.parse(fs.readFileSync(descriptor, 'utf8'));
   } catch {
     return {};
+  } finally {
+    try {
+      if (descriptor !== null) fs.closeSync(descriptor);
+    } catch {
+      // Reading configuration is already complete; a close error must not
+      // replace the safe empty-config fallback.
+    }
   }
 }
 
@@ -137,12 +149,15 @@ function resolveBearerToken(config) {
 function ensurePrivateConfigDirectory(file) {
   const directory = path.dirname(file);
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const entry = fs.lstatSync(directory);
-  if (!entry.isDirectory() || entry.isSymbolicLink()) {
-    throw new Error('Cowork config directory must be a non-symlink directory');
+  let descriptor;
+  try {
+    descriptor = fs.openSync(directory, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  } catch (error) {
+    if (error?.code === 'ELOOP') {
+      throw new Error('Cowork config directory must be a non-symlink directory');
+    }
+    throw error;
   }
-
-  const descriptor = fs.openSync(directory, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
   try {
     if (!fs.fstatSync(descriptor).isDirectory()) {
       throw new Error('Cowork config directory must be a directory');
@@ -154,24 +169,9 @@ function ensurePrivateConfigDirectory(file) {
   return directory;
 }
 
-function assertSafeConfigOutput(file) {
-  try {
-    const existing = fs.lstatSync(file);
-    if (existing.isSymbolicLink()) {
-      throw new Error('Cowork config output must not be a symbolic link');
-    }
-    if (!existing.isFile() || existing.nlink !== 1) {
-      throw new Error('Cowork config output must be an unlinked regular file');
-    }
-  } catch (err) {
-    if (err.code !== 'ENOENT') throw err;
-  }
-}
-
 function persistToken(token, expiresInSeconds) {
   const file = configPath();
   const directory = ensurePrivateConfigDirectory(file);
-  assertSafeConfigOutput(file);
   const config = readConfig();
   config.bench_cowork_token = token;
   if (Number.isFinite(expiresInSeconds)) {
