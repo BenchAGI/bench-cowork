@@ -27,6 +27,10 @@ const path = require('path');
 
 const BRIDGE_VERSION = '0.5.0';
 const DEFAULT_API_BASE = 'https://benchagi.com/api/v1';
+const ALLOWED_API_BASES = new Set([
+  'https://benchagi.com/api/v1',
+  'https://staging.benchagi.com/api/v1',
+]);
 const REFRESH_PATH = '/cowork/auth/refresh';
 const HTTP_TIMEOUT_MS = Number(process.env.BENCH_BRIDGE_TIMEOUT_MS || 30000);
 
@@ -91,7 +95,37 @@ function resolveBase(config) {
   const template = manifest.transport.base || '${bench_api_base}';
   const resolved = template.replace(/\$\{([^}]+)\}/g, (_, name) => resolveVar(name, config) || '');
   const base = resolved || manifest.transport.default_base || DEFAULT_API_BASE;
-  return base.replace(/\/+$/, '');
+  return normalizeApiBase(base);
+}
+
+/**
+ * Resolve the only API bases that may receive cowork bearer/API-key requests.
+ *
+ * The bridge rereads its token and base from local config for every call.
+ * Keeping the base on the documented production/staging API origins prevents a
+ * tampered config from redirecting those credentials. Integration tests may
+ * use an ephemeral loopback server only with NODE_ENV=test.
+ */
+function normalizeApiBase(baseRaw) {
+  const base = new URL(baseRaw);
+  if (base.username || base.password) {
+    throw new Error('Bench API base must not contain credentials');
+  }
+  if (base.search || base.hash) {
+    throw new Error('Bench API base must not contain a query or fragment');
+  }
+
+  const pathName = base.pathname.replace(/\/+$/, '');
+  const normalized = `${base.origin}${pathName}`;
+  if (ALLOWED_API_BASES.has(normalized)) return normalized;
+
+  const isTestLoopback = process.env.NODE_ENV === 'test'
+    && base.protocol === 'http:'
+    && (base.hostname === '127.0.0.1' || base.hostname === '::1' || base.hostname === 'localhost')
+    && pathName === '/api/v1';
+  if (isTestLoopback) return normalized;
+
+  throw new Error('Bench API base must be a documented production or staging /api/v1 origin');
 }
 
 function resolveBearerToken(config) {

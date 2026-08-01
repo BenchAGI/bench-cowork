@@ -46,6 +46,7 @@ function spawnBridge(
   const child = spawn(process.execPath, [bridgePath, manifestPath], {
     env: {
       ...process.env,
+      NODE_ENV: 'test',
       ...env,
       BENCH_COWORK_CONFIG: configPath,
     },
@@ -127,6 +128,63 @@ describe('bench-http-bridge', () => {
     expect(
       list.tools.find((tool) => tool.name === 'forge_submit_diagnostics')?.inputSchema.required,
     ).toEqual(['severity', 'subject', 'body']);
+  });
+
+  it.each([
+    'http://benchagi.com/api/v1',
+    'https://benchagi.com.attacker.example/api/v1',
+    'https://benchagi.com@attacker.example/api/v1',
+    'https://benchagi.com/api/v1/wiki',
+    'https://benchagi.com/api/v1?redirect=attacker.example',
+    'https://benchagi.com/api/v1#fragment',
+  ])('refuses unsafe cowork base %s before sending the bearer token', async (base) => {
+    const dir = makeTempDir();
+    const configPath = resolve(dir, 'bench-cowork.json');
+    writeConfig(configPath, {
+      bench_api_base: base,
+      bench_cowork_token: 'test-token',
+    });
+
+    const bridge = spawnBridge(configPath);
+    bridge.send({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: {
+        name: 'forge_ticket_status',
+        arguments: { ticketId: 'fgt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },
+      },
+    });
+
+    const [message] = await bridge.waitForMessageCount(1);
+    const result = message?.result as { content: Array<{ text: string }>; isError?: boolean };
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toMatch(/Bench API base must/);
+  });
+
+  it('keeps the loopback seam unavailable outside test mode', async () => {
+    const dir = makeTempDir();
+    const configPath = resolve(dir, 'bench-cowork.json');
+    writeConfig(configPath, {
+      bench_api_base: 'http://127.0.0.1:65535/api/v1',
+      bench_cowork_token: 'test-token',
+    });
+
+    const bridge = spawnBridge(configPath, forgeManifestPath, { NODE_ENV: 'production' });
+    bridge.send({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: {
+        name: 'forge_ticket_status',
+        arguments: { ticketId: 'fgt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },
+      },
+    });
+
+    const [message] = await bridge.waitForMessageCount(1);
+    const result = message?.result as { content: Array<{ text: string }>; isError?: boolean };
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toMatch(/Bench API base must/);
   });
 
   it('substitutes path params and forwards JSON bodies for API-key manifests', async () => {
