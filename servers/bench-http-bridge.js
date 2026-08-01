@@ -53,12 +53,26 @@ const toolsByName = new Map(manifest.tools.map((tool) => [tool.name, tool]));
 // --- config (re-read per call so logins/refreshes are picked up live) --------
 
 function configPath() {
-  return process.env.BENCH_COWORK_CONFIG || path.join(os.homedir(), '.claude', 'config', 'bench-cowork.json');
+  const configuredPath = process.env.BENCH_COWORK_CONFIG
+    || path.join(os.homedir(), '.claude', 'config', 'bench-cowork.json');
+  if (!path.isAbsolute(configuredPath)) {
+    throw new Error('BENCH_COWORK_CONFIG must be an absolute path');
+  }
+
+  const resolvedPath = path.resolve(configuredPath);
+  const parentDirectory = path.dirname(resolvedPath);
+  if (parentDirectory === path.parse(parentDirectory).root) {
+    throw new Error('Cowork config must not be written directly to the filesystem root');
+  }
+  return resolvedPath;
 }
 
 function readConfig() {
   try {
-    return JSON.parse(fs.readFileSync(configPath(), 'utf8'));
+    const file = configPath();
+    const existing = fs.lstatSync(file);
+    if (existing.isSymbolicLink() || !existing.isFile() || existing.nlink !== 1) return {};
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch {
     return {};
   }
@@ -86,19 +100,75 @@ function resolveBearerToken(config) {
   return config.bench_cowork_token || (auth.token_env && process.env[auth.token_env]) || null;
 }
 
+function ensurePrivateConfigDirectory(file) {
+  const directory = path.dirname(file);
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const entry = fs.lstatSync(directory);
+  if (!entry.isDirectory() || entry.isSymbolicLink()) {
+    throw new Error('Cowork config directory must be a non-symlink directory');
+  }
+
+  const descriptor = fs.openSync(directory, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  try {
+    if (!fs.fstatSync(descriptor).isDirectory()) {
+      throw new Error('Cowork config directory must be a directory');
+    }
+    fs.fchmodSync(descriptor, 0o700);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+  return directory;
+}
+
+function assertSafeConfigOutput(file) {
+  try {
+    const existing = fs.lstatSync(file);
+    if (existing.isSymbolicLink()) {
+      throw new Error('Cowork config output must not be a symbolic link');
+    }
+    if (!existing.isFile() || existing.nlink !== 1) {
+      throw new Error('Cowork config output must be an unlinked regular file');
+    }
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+  }
+}
+
 function persistToken(token, expiresInSeconds) {
   const file = configPath();
-  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const directory = ensurePrivateConfigDirectory(file);
+  assertSafeConfigOutput(file);
   const config = readConfig();
   config.bench_cowork_token = token;
   if (Number.isFinite(expiresInSeconds)) {
     config.bench_cowork_expires_at = new Date(Date.now() + expiresInSeconds * 1000).toISOString();
   }
-  // Atomic: tmp file in the same directory, 0600, rename over the original.
-  const tmp = `${file}.tmp-${process.pid}`;
-  fs.writeFileSync(tmp, JSON.stringify(config, null, 2) + '\n', { mode: 0o600 });
-  fs.chmodSync(tmp, 0o600);
-  fs.renameSync(tmp, file);
+  // Atomic: private, exclusive temp file in the same directory followed by rename.
+  const tmp = path.join(
+    directory,
+    `.${path.basename(file)}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  );
+  let descriptor = null;
+  try {
+    descriptor = fs.openSync(
+      tmp,
+      fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW,
+      0o600,
+    );
+    const temporary = fs.fstatSync(descriptor);
+    if (!temporary.isFile() || temporary.nlink !== 1) {
+      throw new Error('Cowork config temporary output must be an unlinked regular file');
+    }
+    fs.writeFileSync(descriptor, JSON.stringify(config, null, 2) + '\n', 'utf8');
+    fs.fchmodSync(descriptor, 0o600);
+    fs.fsyncSync(descriptor);
+    fs.closeSync(descriptor);
+    descriptor = null;
+    fs.renameSync(tmp, file);
+  } finally {
+    if (descriptor !== null) fs.closeSync(descriptor);
+    fs.rmSync(tmp, { force: true });
+  }
 }
 
 // --- HTTP --------------------------------------------------------------------
