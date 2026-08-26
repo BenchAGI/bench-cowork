@@ -15,6 +15,9 @@
  * - Auth state is re-read from ~/.claude/config/bench-cowork.json ON EVERY CALL, so
  *   a fresh /bench-login (or another bridge process refreshing the token) is picked
  *   up without restarting the server.
+ * - A cached bench_instance_id is validated and forwarded as X-Instance-Id on
+ *   bearer application calls so multi-workspace users stay on the tenant selected
+ *   during login. API-key and token-refresh calls never inherit that header.
  * - On a 401 with code COWORK_BAD_TOKEN: POST /cowork/auth/refresh with the stale
  *   token, persist the refreshed token atomically (tmp file + rename, chmod 600,
  *   update bench_cowork_expires_at), then retry the original call exactly once.
@@ -32,6 +35,7 @@ const ALLOWED_API_BASES = new Set([
   'https://staging.benchagi.com/api/v1',
 ]);
 const REFRESH_PATH = '/cowork/auth/refresh';
+const INSTANCE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const HTTP_TIMEOUT_MS = Number(process.env.BENCH_BRIDGE_TIMEOUT_MS || 30000);
 
 // --- manifest ----------------------------------------------------------------
@@ -144,6 +148,30 @@ function resolveBearerToken(config) {
   // Config file first (refreshable on disk), env second (/bench-login suggests exporting it).
   const auth = manifest.transport.auth || {};
   return config.bench_cowork_token || (auth.token_env && process.env[auth.token_env]) || null;
+}
+
+// Only an explicitly absent pin (missing key or null, which is what /bench-login
+// writes when the identity lookup fails) may fall back to server-side tenant
+// resolution. Anything else that is present but unusable — blank string, wrong
+// type, or off-pattern — fails the call closed rather than silently unscoping it.
+function resolveInstanceId(config) {
+  const raw = config.bench_instance_id;
+  if (raw == null) return null;
+  if (typeof raw !== 'string') {
+    throw new Error(`bench_instance_id must be a string matching ${INSTANCE_ID_PATTERN} (in ${configPath()})`);
+  }
+  const instanceId = raw.trim();
+  if (!INSTANCE_ID_PATTERN.test(instanceId)) {
+    throw new Error(`bench_instance_id must match ${INSTANCE_ID_PATTERN} (in ${configPath()}); re-run /bench-login`);
+  }
+  return instanceId;
+}
+
+function bearerHeaders(config, token) {
+  const headers = { Authorization: `Bearer ${token}` };
+  const instanceId = resolveInstanceId(config);
+  if (instanceId) headers['X-Instance-Id'] = instanceId;
+  return headers;
 }
 
 function ensurePrivateConfigDirectory(file) {
@@ -329,7 +357,7 @@ async function callTool(tool, args) {
       'No cowork token found. Run /bench-login (writes ~/.claude/config/bench-cowork.json) or export BENCH_COWORK_TOKEN.'
     );
   }
-  let response = await httpCall(tool, args, { Authorization: `Bearer ${token}` }, base);
+  let response = await httpCall(tool, args, bearerHeaders(config, token), base);
   if (response.status === 401 && errorCode(response) === 'COWORK_BAD_TOKEN') {
     // Stale token: sliding refresh with the stale token, persist, retry ONCE.
     try {
@@ -342,7 +370,7 @@ async function callTool(tool, args) {
           'Re-authenticate with /bench-login.'
       );
     }
-    response = await httpCall(tool, args, { Authorization: `Bearer ${token}` }, base);
+    response = await httpCall(tool, args, bearerHeaders(config, token), base);
   }
   return toolResult(response);
 }

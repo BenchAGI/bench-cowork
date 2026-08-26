@@ -206,6 +206,97 @@ describe('bench-http-bridge', () => {
     expect(result.content[0]?.text).toMatch(/Bench API base must/);
   });
 
+  it.each([
+    { label: 'configured tenant pin', configuredInstanceId: 'D3nfrvqTaPqc3rJRkj6Q', expectedHeader: 'D3nfrvqTaPqc3rJRkj6Q' },
+    { label: 'absent tenant pin', configuredInstanceId: undefined, expectedHeader: undefined },
+  ])('keeps bearer calls scoped for $label', async ({ configuredInstanceId, expectedHeader }) => {
+    const dir = makeTempDir();
+    const configPath = resolve(dir, 'bench-cowork.json');
+    let observedInstanceHeader: string | undefined;
+    const server = createServer((req, res) => {
+      observedInstanceHeader = req.headers['x-instance-id'] as string | undefined;
+      expect(req.headers.authorization).toBe('Bearer fresh-token');
+      json(res, 200, { ticketId: 'fgt_cccccccccccccccccccccccccccccccc', status: 'queued' });
+    });
+
+    await new Promise<void>((resolveListen) => server.listen(0, '127.0.0.1', resolveListen));
+    try {
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('server did not bind to a port');
+      writeConfig(configPath, {
+        bench_api_base: `http://127.0.0.1:${address.port}/api/v1`,
+        bench_cowork_token: 'fresh-token',
+        ...(configuredInstanceId ? { bench_instance_id: configuredInstanceId } : {}),
+      });
+
+      const bridge = spawnBridge(configPath);
+      bridge.send({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: {
+          name: 'forge_ticket_status',
+          arguments: { ticketId: 'fgt_cccccccccccccccccccccccccccccccc' },
+        },
+      });
+
+      const [message] = await bridge.waitForMessageCount(1);
+      const result = message.result as { content: Array<{ text: string }>; isError?: boolean };
+      expect(result.isError).not.toBe(true);
+      expect(observedInstanceHeader).toBe(expectedHeader);
+    } finally {
+      await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+    }
+  });
+
+  it.each([
+    '../another-tenant',
+    '',
+    '   ',
+    'tenant\nforged-header',
+    'tenant.with.dots',
+    'x'.repeat(129),
+    42,
+  ])('rejects invalid configured tenant pin %j before making a request', async (invalidInstanceId) => {
+    const dir = makeTempDir();
+    const configPath = resolve(dir, 'bench-cowork.json');
+    let requestCount = 0;
+    const server = createServer((_req, res) => {
+      requestCount += 1;
+      json(res, 500, { error: 'request should not have been sent' });
+    });
+
+    await new Promise<void>((resolveListen) => server.listen(0, '127.0.0.1', resolveListen));
+    try {
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('server did not bind to a port');
+      writeConfig(configPath, {
+        bench_api_base: `http://127.0.0.1:${address.port}/api/v1`,
+        bench_cowork_token: 'fresh-token',
+        bench_instance_id: invalidInstanceId,
+      });
+
+      const bridge = spawnBridge(configPath);
+      bridge.send({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: {
+          name: 'forge_ticket_status',
+          arguments: { ticketId: 'fgt_dddddddddddddddddddddddddddddddd' },
+        },
+      });
+
+      const [message] = await bridge.waitForMessageCount(1);
+      const result = message.result as { content: Array<{ text: string }>; isError?: boolean };
+      expect(result.isError).toBe(true);
+      expect(result.content[0]?.text).toMatch(/bench_instance_id must/);
+      expect(requestCount).toBe(0);
+    } finally {
+      await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+    }
+  });
+
   it('substitutes path params and forwards JSON bodies for API-key manifests', async () => {
     const dir = makeTempDir();
     const configPath = resolve(dir, 'bench-cowork.json');
@@ -218,6 +309,7 @@ describe('bench-http-bridge', () => {
       requests.push({ method: req.method ?? '', pathname: url.pathname, body });
 
       expect(req.headers['x-api-key']).toBe('bench_test_secret');
+      expect(req.headers['x-instance-id']).toBeUndefined();
 
       if (req.method === 'GET' && url.pathname === '/api/v1/chassis/deals/deal%201%2F2') {
         json(res, 200, { id: 'deal 1/2', ok: true });
@@ -238,6 +330,7 @@ describe('bench-http-bridge', () => {
       if (!address || typeof address === 'string') throw new Error('server did not bind to a port');
       writeConfig(configPath, {
         bench_api_base: `http://127.0.0.1:${address.port}/api/v1`,
+        bench_instance_id: 'tenant-must-not-forward-on-api-key',
       });
 
       const bridge = spawnBridge(configPath, dealsManifestPath, {
@@ -314,6 +407,7 @@ describe('bench-http-bridge', () => {
 
     let refreshCount = 0;
     const submitAuthHeaders: string[] = [];
+    const submitInstanceHeaders: Array<string | undefined> = [];
     const server = createServer(async (req, res) => {
       const url = new URL(req.url ?? '/', 'http://127.0.0.1');
       if (req.method === 'POST' && url.pathname === '/api/v1/cowork/auth/refresh') {
@@ -321,6 +415,7 @@ describe('bench-http-bridge', () => {
         refreshCount += 1;
         await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
         expect(req.headers.authorization).toBe('Bearer stale-token');
+        expect(req.headers['x-instance-id']).toBeUndefined();
         json(res, 200, { token: 'fresh-token', expiresInSeconds: 3600 });
         return;
       }
@@ -334,6 +429,7 @@ describe('bench-http-bridge', () => {
         });
         const auth = req.headers.authorization ?? '';
         submitAuthHeaders.push(auth);
+        submitInstanceHeaders.push(req.headers['x-instance-id'] as string | undefined);
         if (auth === 'Bearer stale-token') {
           json(res, 401, { code: 'COWORK_BAD_TOKEN' });
           return;
@@ -357,6 +453,7 @@ describe('bench-http-bridge', () => {
       writeConfig(configPath, {
         bench_api_base: `http://127.0.0.1:${address.port}/api/v1`,
         bench_cowork_token: 'stale-token',
+        bench_instance_id: 'D3nfrvqTaPqc3rJRkj6Q',
       });
       chmodSync(dir, 0o755);
       chmodSync(configPath, 0o644);
@@ -389,6 +486,12 @@ describe('bench-http-bridge', () => {
       expect(refreshCount).toBe(1);
       expect(submitAuthHeaders.filter((header) => header === 'Bearer stale-token')).toHaveLength(2);
       expect(submitAuthHeaders.filter((header) => header === 'Bearer fresh-token')).toHaveLength(2);
+      expect(submitInstanceHeaders).toEqual([
+        'D3nfrvqTaPqc3rJRkj6Q',
+        'D3nfrvqTaPqc3rJRkj6Q',
+        'D3nfrvqTaPqc3rJRkj6Q',
+        'D3nfrvqTaPqc3rJRkj6Q',
+      ]);
       expect(readPrivateConfig(configPath).bench_cowork_token).toBe('fresh-token');
       expect(statSync(dirname(configPath)).mode & 0o777).toBe(0o700);
       expect(statSync(configPath).mode & 0o777).toBe(0o600);

@@ -66,7 +66,7 @@
       "default": null
     },
     "bench_instance_id": {
-      "description": "Instance ID this Cowork session operates against. Leave null for personal canon.",
+      "description": "Instance ID this Cowork session operates against, forwarded as X-Instance-Id on bearer calls. Must match /^[A-Za-z0-9_-]{1,128}$/; a present-but-invalid value fails calls closed rather than falling back to an unscoped tenant. Leave null for personal canon.",
       "default": null
     },
     "monorepo_root": {

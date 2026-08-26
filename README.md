@@ -69,12 +69,18 @@ handles session-driven asks.
 Registered HTTP manifests in `mcp/` are served by **one** generic, dependency-free stdio MCP
 server: `servers/bench-http-bridge.js <manifest.json>`. It registers the manifest's
 tools, re-reads `~/.claude/config/bench-cowork.json` on every call (so a fresh
-`/bench-login` is picked up without a restart), and on a `401 COWORK_BAD_TOKEN` it
+`/bench-login` is picked up without a restart), pins bearer application calls to
+the strictly validated cached `bench_instance_id` via `X-Instance-Id`, and on a
+`401 COWORK_BAD_TOKEN` it
 auto-refreshes the cowork JWT via `POST /cowork/auth/refresh`, persists the new token
 atomically (tmp file + rename, `chmod 600`), and retries the call once — no more
 weekly bridge death when the 7-day token expires. Refresh exhaustion
 (`COWORK_REFRESH_EXPIRED` / `COWORK_REFRESH_CHAIN_TOO_OLD`) means re-running
-`/bench-login`.
+`/bench-login`. Tenant pins are never forwarded to API-key manifests or to the
+token-refresh endpoint itself. Only a `null`/absent `bench_instance_id` falls back
+to server-side tenant resolution — a present-but-invalid pin (blank, wrong type,
+off-pattern) fails the call closed instead of silently landing on the wrong
+workspace.
 
 ## What this doesn't do
 
