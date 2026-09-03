@@ -122,6 +122,5 @@ tools/bench-cowork/
 ### Known limits (deferred to Cycle 7)
 
 - **Rate-limiter is a pass-through** — `apps/web/src/lib/cowork/rate-limit-stub.ts` has TODO markers.
-- **Slack relay wire-up is stubbed** — routes return `status: "queued"` pending in-process wiring to `tools/slack-relay/`.
-- **Slack history read is stubbed** — returns empty `messages[]`.
+- **Slack relay is not wired** — `slack/sessions`, `slack/sessions/send`, and `slack/history` validate auth + body and then return `501 not_implemented`. Nothing is sent, queued, or readable; do not report a message as sent. (They used to answer `200 status: "queued"` while persisting nothing — #6460.) In-process wiring to `tools/slack-relay/` is a separate decision.
 - **Path B OAuth device-code** is deferred — only pilot customers who block on it should trigger it.

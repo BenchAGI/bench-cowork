@@ -1,6 +1,6 @@
 {
   "name": "bench-slack",
-  "description": "Relay messages through BenchAGI's Slack relay infrastructure. Wraps sessions.create (open new thread) and sessions.send (send on cached sessionKey). All calls carry the user's Bench UID; relay enforces per-tenant Slack bot token.",
+  "description": "Relay messages through BenchAGI's Slack relay infrastructure. NOT IMPLEMENTED YET: every tool returns HTTP 501 not_implemented after auth + validation — nothing is sent, queued, or readable. Intended: wraps sessions.create (open new thread) and sessions.send (send on cached sessionKey); all calls carry the user's Bench UID and the relay enforces the per-tenant Slack bot token.",
   "transport": {
     "type": "http",
     "base": "${bench_api_base}",
@@ -12,7 +12,7 @@
   "tools": [
     {
       "name": "slack_session_create",
-      "description": "Open a new Slack relay session: resolves the recipient (Bench UID or email), picks the right channel/DM, posts the first message, and returns a sessionKey for follow-ups in the same thread.",
+      "description": "NOT IMPLEMENTED — the server returns HTTP 501 not_implemented; nothing is sent or queued. Do NOT report the message as sent. (Intended: open a new Slack relay session — resolve the recipient (Bench UID or email), pick the right channel/DM, post the first message, return a sessionKey for follow-ups in the same thread.)",
       "method": "POST",
       "path": "/cowork/slack/sessions",
       "body_schema": {
@@ -24,7 +24,7 @@
     },
     {
       "name": "slack_session_send",
-      "description": "Send a follow-up message on an existing sessionKey (same thread). sessionKey TTL is 1 hour; expired keys return a specific error so callers know to open a new session.",
+      "description": "NOT IMPLEMENTED — the server returns HTTP 501 not_implemented; nothing is sent or queued. Do NOT report the message as sent. (Intended: send a follow-up message on an existing sessionKey, same thread; sessionKey TTL 1 hour.)",
       "method": "POST",
       "path": "/cowork/slack/sessions/send",
       "body_schema": {
@@ -36,7 +36,7 @@
     },
     {
       "name": "slack_history",
-      "description": "Read recent messages in a thread the caller has relay access to. Does not read arbitrary channel history — only threads the current user's relay session is authorized for.",
+      "description": "NOT IMPLEMENTED — the server returns HTTP 501 not_implemented; there is no thread history to read. (Intended: read recent messages in a thread the caller has relay access to — never arbitrary channel history.)",
       "method": "GET",
       "path": "/cowork/slack/history",
       "query_params": ["session_key", "limit"]
