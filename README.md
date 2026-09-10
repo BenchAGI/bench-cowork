@@ -108,7 +108,7 @@ tools/bench-cowork/
 
 ## Status
 
-**Shipped 2026-04-20 (Cycle 6)** — 7 agents + 11 skills + 7 registered MCP servers + `/bench-login` auth flow + Amendment-10 pre-commit hook. Rate-limiter is stubbed pending Cycle 7 wire-up.
+**Shipped 2026-04-20 (Cycle 6)** — 7 agents + 11 skills + 7 registered MCP servers + `/bench-login` auth flow + Amendment-10 pre-commit hook. The cowork rate limiter and Slack relay use live tenant-bound delivery paths.
 
 | Surface | Count | Status |
 |---|---|---|
@@ -119,8 +119,11 @@ tools/bench-cowork/
 | Hooks | 1 | ✅ pre-commit canvas-update nudge (Amendment 10) |
 | Cloud endpoints | 9 | ✅ `/api/v1/cowork/{auth,auth/refresh,canvas/tile,canvas/drift,canvas/edges,slack/sessions,slack/sessions/send,slack/history,forge/ticket}` |
 
-### Known limits (deferred to Cycle 7)
+### How delivery works
 
-- **Rate-limiter is a pass-through** — `apps/web/src/lib/cowork/rate-limit-stub.ts` has TODO markers.
-- **Slack relay is not wired** — `slack/sessions`, `slack/sessions/send`, and `slack/history` validate auth + body and then return `501 not_implemented`. Nothing is sent, queued, or readable; do not report a message as sent. (They used to answer `200 status: "queued"` while persisting nothing — #6460.) In-process wiring to `tools/slack-relay/` is a separate decision.
+- **Rate limiting** — cowork write/read counters are tenant-scoped and reclaimed by the scheduled `rateLimits` TTL task.
+- **Slack relay** — `slack/sessions` and `slack/sessions/send` require `approval_id`, bind approvals to the complete payload, and reconcile durable delivery claims before retrying. `slack/history` reads only the owned thread. A relay session stays usable for one hour.
+
+### Known limits
+
 - **Path B OAuth device-code** is deferred — only pilot customers who block on it should trigger it.
