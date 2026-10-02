@@ -57,16 +57,52 @@ op read 'op://<vault>/<item>/<field>'          # THE read primitive — one fiel
 - **Desktop-app integration must be ON**: 1Password app → Settings → Developer →
   enable **"Integrate with 1Password CLI"**. Without it, every `op` call fails to
   authenticate no matter what the CLI does.
-- First `op` call in a session triggers a **biometric prompt** (Touch ID / password) in
-  the desktop app — this is expected. Tell the user to approve it; do not retry in a loop
-  while the prompt is pending.
+- First `op` call in an **interactive** session triggers a **biometric prompt** (Touch ID /
+  password) in the desktop app — this is expected. Tell the user to approve it; do not retry
+  in a loop while the prompt is pending.
+
+## Unattended and scheduled jobs (cron, gateway lanes, launchd)
+
+Nobody is there to answer a prompt, so a scheduled job must never depend on one, and must
+never call `op` in a bare loop. Remedy's lead-intake job (2026-10-01) called `op read` every
+2 minutes; when `op` hung (blocked opening the 1Password desktop app's settings file), its
+15 s timeout killed the client but not the `op daemon --background` it had spawned. Forty
+orphans piled up in 16 minutes and every run was a fresh hang with no pause.
+
+1. **Wrap every `op` call in the guard.** It runs the command in its own process group,
+   kills the whole group on timeout (SIGTERM, then SIGKILL, and it waits until the group is
+   gone), also kills any process it started that escaped into its own session (identified by a
+   per-run marker, never by name or age, so other jobs' `op daemon`s are untouched), stops
+   cleanly when the scheduler sends it SIGTERM/SIGINT/SIGHUP, and opens a breaker so a
+   failing job backs off (30 s, 60 s, 120 s ... capped at 30 min) instead of retrying:
+
+   ```bash
+   node scripts/op-guard.mjs --timeout-s 15 --key lead-intake -- op read 'op://Agent/<item>/credential'
+   ```
+
+   Exit codes: `124` timed out and was killed; `75` breaker open, `op` was not called;
+   `129`/`130`/`143` the guard was cancelled by SIGHUP/SIGINT/SIGTERM (counted as a failure).
+   Treat both as "credential unavailable": skip the run, alert once, do not loop.
+2. **Read once per run, not once per item.** Resolve what the run needs up front (or hold it
+   in the process's memory for the life of a long-running worker). Do not read the same
+   secret every cycle.
+3. **Use a service-account token for headless work** (`OP_SERVICE_ACCOUNT_TOKEN`, supplied
+   by the supervisor's secret channel). The desktop-app integration is for people at a
+   keyboard; a scheduled job that depends on it will eventually hit a prompt nobody sees.
+4. **Alert on the breaker, once.** A job that cannot read its credential must say so
+   (health report, owner message) rather than fail silently every cycle.
+5. **Health check (follow-up, not yet implemented).** Nothing today reports orphaned
+   `op daemon` processes or open breakers; breaker state lives in
+   `~/.cache/bench-op-guard/<key>.json` and can be read directly. Wiring this into
+   `customer-harness-health` is a separate piece of work.
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
 | `op: command not found` | `brew install --cask 1password-cli` (a cask, not a formula). HaaS boxes install it in `/Users/benchharness/homebrew/bin/op` and pin `FORGE_OP_BIN` via `scripts/harness-walled-bootstrap.sh`; system Homebrew commonly uses `/opt/homebrew/bin/op`. |
-| `op` hangs, then times out | A biometric prompt is waiting in the desktop app — have the user approve it. |
+| `op` hangs, then times out | Interactive: a biometric prompt is waiting in the desktop app — have the user approve it. Unattended: `op` may be blocked opening the desktop app's settings file (macOS privacy prompt or a stuck app); see "Unattended and scheduled jobs" — use `op-guard`, and look at the Mac's screen for a pending "access data from other apps" dialog before clicking anything. |
+| Many `op daemon --background` processes with parent 1 | Orphans from killed `op` clients. `ps -axo pid,ppid,etime,command \| grep 'op daemon'`; `op-guard` clears what it started itself, not other jobs' daemons. A stale `~/.config/op/op-daemon.sock` with no live owner is a symptom, not a cause. |
 | "could not connect to the 1Password app" / auth errors | Desktop app not running, or Settings → Developer → "Integrate with 1Password CLI" is off. Start the app and enable the toggle. |
 | Item/vault not found | `op vault list` then `op item list --vault '<vault>'` to confirm exact names; names with spaces need quotes. |
 | Works in one terminal, not another | The CLI binds to the account the desktop app is signed into; check `op whoami`. |
