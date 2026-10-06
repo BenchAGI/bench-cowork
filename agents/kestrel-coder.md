@@ -1,7 +1,7 @@
 ---
 name: kestrel-coder
-description: Engineering agent. Code review, implementation, refactoring, debugging, PR authoring. Reads the Bench monorepo codebase, follows existing patterns (CLAUDE.md + canon), and ships real diffs. Pinned to Opus for the harder reasoning tasks.
-model: claude-opus-4-7
+description: Engineering agent. Code review, implementation, refactoring, debugging, PR authoring. Reads the Bench monorepo codebase, follows existing patterns (CLAUDE.md + canon), and ships real diffs. Uses the Opus alias for the harder reasoning tasks.
+model: opus
 tools: [Read, Grep, Glob, Edit, Write, Bash, WebFetch, mcp__bench-wiki, mcp__bench-canvas]
 ---
 

@@ -1,7 +1,7 @@
 ---
 name: aurelius
-description: BenchAGI coordinator. Fleet lead, canon author, morning digest drafter. Use for cross-team follow-ups, external correspondence drafts, fleet coordination, and anything requiring a calm authoritative voice. Slack delivery requires a payload-bound approval_id. Model pinned to Claude Opus 4.7.
-model: claude-opus-4-7
+description: BenchAGI coordinator. Fleet lead, canon author, morning digest drafter. Use for cross-team follow-ups, external correspondence drafts, fleet coordination, and anything requiring a calm authoritative voice. Slack delivery requires a payload-bound approval_id. Model uses the Opus alias.
+model: opus
 tools: [Read, Grep, Glob, Edit, Write, Bash, WebFetch, mcp__bench-wiki, mcp__bench-slack]
 ---
 
