@@ -83,6 +83,7 @@ orphans piled up in 16 minutes and every run was a fresh hang with no pause.
    Exit codes: `124` timed out and was killed; `75` breaker open, `op` was not called;
    `129`/`130`/`143` the guard was cancelled by SIGHUP/SIGINT/SIGTERM (counted as a failure).
    Treat both as "credential unavailable": skip the run, alert once, do not loop.
+   (`status`, item 5, has its own exit codes: `0`, `75`, `76`.)
 2. **Read once per run, not once per item.** Resolve what the run needs up front (or hold it
    in the process's memory for the life of a long-running worker). Do not read the same
    secret every cycle.
@@ -91,7 +92,44 @@ orphans piled up in 16 minutes and every run was a fresh hang with no pause.
    keyboard; a scheduled job that depends on it will eventually hit a prompt nobody sees.
 4. **Alert on the breaker, once.** A job that cannot read its credential must say so
    (health report, owner message) rather than fail silently every cycle.
-5. **Diagnose with `op-doctor` before re-enabling a job.** When a job's credential read keeps
+5. **Prove the credential after an idle gap; a live scheduler proves nothing.** A job that
+   polls every 2 minutes but only reads its credential when there is work can run all
+   night on an empty check and still fail on the first real read in the morning (Remedy,
+   #9031: 300 clean runs a night, then the Katy read timed out twice at 15 s). Never cache
+   "the credential works" without an expiry. Ask the guard, with a window:
+
+   ```bash
+   node scripts/op-guard.mjs status --key lead-intake --max-age-s 3600
+   ```
+
+   It is read-only, runs no `op`, and prints JSON. Exit `0`: a real read succeeded within
+   the window. `76`: never verified or older than the window (`stale`) — do a real read now,
+   through the guard, discarding the value, so the failure shows up at 2 am and not at 8 am:
+   `node scripts/op-guard.mjs --key lead-intake -- op read 'op://Agent/<item>/credential' >/dev/null`.
+   `75`: the last read failed (`failing`) or the breaker is open (`breaker-open`) — treat it
+   as "credential unavailable" and alert. `--max-age-s` is required on purpose. With no
+   `--key` it reports every key in the state dir, and the worst one sets the exit code.
+6. **Read what the guard recorded.** State lives in `~/.cache/bench-op-guard/<key>.json`
+   (counts, timestamps and labels only: no secret, command line or environment) and `status`
+   prints it. Every success sets `lastSuccessAt`. Every failure sets `lastFailure`, which a
+   later success keeps:
+
+   | Field | What it tells you |
+   |---|---|
+   | `cause` | `timeout` (killed by the guard), `exit` (`op` returned an error), `cancelled` (the scheduler stopped it), `not-started` |
+   | `idleS` | Seconds since the previous successful read. Failures that cluster at large `idleS` and never at small ones point at the idle gap itself |
+   | `auth` | `service-account` or `no-service-account-token` (then `op` is using the desktop app, which a headless job must not rely on) |
+   | `opCache` | `OP_CACHE` as `true`, `false`, `unset` or `other` |
+   | `opProcessStates` | Kernel state letters of `op` when it hung: `S` waiting on a socket or lock, `U` stuck in the kernel (a file or privacy prompt), `R` spinning |
+   | `network` | On a timeout only: did DNS and a bare TCP connect to `--probe-host` (default `my.1password.com:443`; point it at the account's own `<account>.1password.com` for a sharper answer) work at that moment. `--no-probe` turns it off |
+
+   Read together: if `network.dns` or `network.connect` is not `ok`, the probe could not
+   resolve or connect to the selected host; that could be DNS, the network, or the endpoint.
+   If both are `ok` with `opProcessStates` `S` or `U`, the selected host was reachable while
+   `op` stood still; this does not prove the account-specific path worked. These are leads
+   for an investigation, not a diagnosis: the root cause of the post-idle hang is still open
+   (#9031). Writing state is best effort and never changes the command's result.
+7. **Diagnose with `op-doctor` before re-enabling a job.** When a job's credential read keeps
    timing out (a seat's lead-intake automation, #8810: `op read` timed out at 40 s until the automation
    auto-disabled), run the doctor *the way the job runs* — same user, same environment, the
    gateway lane or launchd context, not a login shell — because whether
@@ -112,6 +150,9 @@ orphans piled up in 16 minutes and every run was a fresh hang with no pause.
    found. Only after it is `OK` should the job be re-enabled, through the job's own supported
    path; the doctor changes nothing, and it never suggests resetting a job's cursor or retry
    data. Wiring it into `customer-harness-health` is a separate piece of work.
+8. **Health check (follow-up, not yet implemented).** Nothing yet wires `status`, open
+   breakers or orphaned `op daemon` processes into `customer-harness-health`; today a job
+   or an operator has to call `status` itself. That wiring is a separate piece of work.
 
 ## Troubleshooting
 
@@ -119,7 +160,8 @@ orphans piled up in 16 minutes and every run was a fresh hang with no pause.
 |---|---|
 | `op: command not found` | `brew install --cask 1password-cli` (a cask, not a formula). HaaS boxes install it in `/Users/benchharness/homebrew/bin/op` and pin `FORGE_OP_BIN` via `scripts/harness-walled-bootstrap.sh`; system Homebrew commonly uses `/opt/homebrew/bin/op`. |
 | `op` hangs, then times out | Interactive: a biometric prompt is waiting in the desktop app — have the user approve it. Unattended: `op` may be blocked opening the desktop app's settings file (macOS privacy prompt or a stuck app); see "Unattended and scheduled jobs" — use `op-guard`, and look at the Mac's screen for a pending "access data from other apps" dialog before clicking anything. |
-| A scheduled job's `op read` times out every run (`CREDENTIAL_PROVIDER_TIMEOUT`) | Run `node scripts/op-doctor.mjs` in the job's own environment. No `OP_SERVICE_ACCOUNT_TOKEN` there means `op` is falling back to the desktop app; a token that is set but still times out points at egress to 1Password or a revoked token. See "Unattended and scheduled jobs" item 5. |
+| Reads work all day, then fail the next morning | An idle-gap failure. `node scripts/op-guard.mjs status --max-age-s 3600` and look at `lastFailure.idleS`, `network` and `opProcessStates` (see "Unattended and scheduled jobs", item 6). Then check the Mac's sleep and network settings, and whether the service-account token is actually set for the job (`auth`). |
+| A scheduled job's `op read` times out every run (`CREDENTIAL_PROVIDER_TIMEOUT`) | Run `node scripts/op-doctor.mjs` in the job's own environment. No `OP_SERVICE_ACCOUNT_TOKEN` there means `op` is falling back to the desktop app; a token that is set but still times out points at egress to 1Password or a revoked token. See "Unattended and scheduled jobs" item 7. |
 | Many `op daemon --background` processes with parent 1 | Orphans from killed `op` clients. `ps -axo pid,ppid,etime,command \| grep 'op daemon'`; `op-guard` clears what it started itself, not other jobs' daemons. A stale `~/.config/op/op-daemon.sock` with no live owner is a symptom, not a cause. |
 | "could not connect to the 1Password app" / auth errors | Desktop app not running, or Settings → Developer → "Integrate with 1Password CLI" is off. Start the app and enable the toggle. |
 | Item/vault not found | `op vault list` then `op item list --vault '<vault>'` to confirm exact names; names with spaces need quotes. |
