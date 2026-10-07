@@ -91,10 +91,27 @@ orphans piled up in 16 minutes and every run was a fresh hang with no pause.
    keyboard; a scheduled job that depends on it will eventually hit a prompt nobody sees.
 4. **Alert on the breaker, once.** A job that cannot read its credential must say so
    (health report, owner message) rather than fail silently every cycle.
-5. **Health check (follow-up, not yet implemented).** Nothing today reports orphaned
-   `op daemon` processes or open breakers; breaker state lives in
-   `~/.cache/bench-op-guard/<key>.json` and can be read directly. Wiring this into
-   `customer-harness-health` is a separate piece of work.
+5. **Diagnose with `op-doctor` before re-enabling a job.** When a job's credential read keeps
+   timing out (a seat's lead-intake automation, #8810: `op read` timed out at 40 s until the automation
+   auto-disabled), run the doctor *the way the job runs* — same user, same environment, the
+   gateway lane or launchd context, not a login shell — because whether
+   `OP_SERVICE_ACCOUNT_TOKEN` is set there is the first thing it checks:
+
+   ```bash
+   node scripts/op-doctor.mjs                                   # provider probe + breakers + orphaned daemons
+   node scripts/op-doctor.mjs --ref 'op://Agent/<item>/credential' --json   # also prove one reference resolves
+   ```
+
+   It is read-only. It probes with `op whoami` through `op-guard` (a hang is killed with its
+   whole process group), with a throwaway breaker, so it never opens, closes or edits a job's
+   breaker. `--ref` reads that one reference and **discards the value**: only "resolved" or the
+   failure class is reported. It reports whether the token is set, never its value, and it
+   classifies `op`'s error text without echoing it. Exit `0` the provider answered, `1` a probe
+   failed, `2` usage. The result code is `CREDENTIAL_PROVIDER_` plus `OK`, `TIMEOUT`, `AUTH`,
+   `NETWORK`, `NOT_FOUND`, `UNAVAILABLE`, `CANCELLED` or `UNKNOWN`, with next steps for what it
+   found. Only after it is `OK` should the job be re-enabled, through the job's own supported
+   path; the doctor changes nothing, and it never suggests resetting a job's cursor or retry
+   data. Wiring it into `customer-harness-health` is a separate piece of work.
 
 ## Troubleshooting
 
@@ -102,6 +119,7 @@ orphans piled up in 16 minutes and every run was a fresh hang with no pause.
 |---|---|
 | `op: command not found` | `brew install --cask 1password-cli` (a cask, not a formula). HaaS boxes install it in `/Users/benchharness/homebrew/bin/op` and pin `FORGE_OP_BIN` via `scripts/harness-walled-bootstrap.sh`; system Homebrew commonly uses `/opt/homebrew/bin/op`. |
 | `op` hangs, then times out | Interactive: a biometric prompt is waiting in the desktop app — have the user approve it. Unattended: `op` may be blocked opening the desktop app's settings file (macOS privacy prompt or a stuck app); see "Unattended and scheduled jobs" — use `op-guard`, and look at the Mac's screen for a pending "access data from other apps" dialog before clicking anything. |
+| A scheduled job's `op read` times out every run (`CREDENTIAL_PROVIDER_TIMEOUT`) | Run `node scripts/op-doctor.mjs` in the job's own environment. No `OP_SERVICE_ACCOUNT_TOKEN` there means `op` is falling back to the desktop app; a token that is set but still times out points at egress to 1Password or a revoked token. See "Unattended and scheduled jobs" item 5. |
 | Many `op daemon --background` processes with parent 1 | Orphans from killed `op` clients. `ps -axo pid,ppid,etime,command \| grep 'op daemon'`; `op-guard` clears what it started itself, not other jobs' daemons. A stale `~/.config/op/op-daemon.sock` with no live owner is a symptom, not a cause. |
 | "could not connect to the 1Password app" / auth errors | Desktop app not running, or Settings → Developer → "Integrate with 1Password CLI" is off. Start the app and enable the toggle. |
 | Item/vault not found | `op vault list` then `op item list --vault '<vault>'` to confirm exact names; names with spaces need quotes. |
