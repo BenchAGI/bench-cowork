@@ -56,6 +56,7 @@ const BENCH_OUTBOUND_TOOLS = [
   'team_revoke_invite',
   'team_set_role',
   'team_set_member_teams',
+  'team_set_deal_scope',
   'delete_deal',
   'connect_quickbooks',
 ];
