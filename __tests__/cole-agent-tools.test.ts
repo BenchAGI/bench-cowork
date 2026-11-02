@@ -57,6 +57,7 @@ const BENCH_OUTBOUND_TOOLS = [
   'team_set_role',
   'team_set_member_teams',
   'team_set_deal_scope',
+  'bulk_assign_deals',
   'delete_deal',
   'connect_quickbooks',
 ];
