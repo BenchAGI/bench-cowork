@@ -255,6 +255,32 @@ function buildPath(tool, args) {
   return resolvedPath;
 }
 
+async function readBoundedResponseText(response, maxBytes) {
+  const declared = Number(response.headers.get('content-length') || '0');
+  if (Number.isFinite(declared) && declared > maxBytes) throw new Error('response too large');
+  if (!response.body?.getReader) {
+    const text = await response.text();
+    if (Buffer.byteLength(text, 'utf8') > maxBytes) throw new Error('response too large');
+    return text;
+  }
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) throw new Error('response too large');
+      chunks.push(Buffer.from(value));
+    }
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    throw error;
+  }
+  return Buffer.concat(chunks, total).toString('utf8');
+}
+
 async function httpCall(tool, args, headers, base) {
   const pathKeys = Array.isArray(tool.path_params) ? tool.path_params : [];
   const url = new URL(base + buildPath(tool, args));
@@ -263,7 +289,7 @@ async function httpCall(tool, args, headers, base) {
     if (args[key] != null) url.searchParams.set(key, String(args[key]));
   }
   const method = (tool.method || 'GET').toUpperCase();
-  const init = { method, headers: { ...headers }, signal: AbortSignal.timeout(HTTP_TIMEOUT_MS) };
+  const init = { method, redirect: 'error', headers: { ...headers }, signal: AbortSignal.timeout(HTTP_TIMEOUT_MS) };
   if (method !== 'GET' && method !== 'HEAD') {
     const body = {};
     for (const [key, value] of Object.entries(args)) {
@@ -272,8 +298,21 @@ async function httpCall(tool, args, headers, base) {
     init.headers['Content-Type'] = 'application/json';
     init.body = JSON.stringify(body);
   }
-  const res = await fetch(url, init);
-  const text = await res.text();
+  const res = await fetch(url, init).catch(() => {
+    throw new Error('HTTP request failed');
+  });
+  if (res.status >= 300 && res.status < 400) {
+    await res.body?.cancel().catch(() => undefined);
+    throw new Error('redirect not allowed');
+  }
+  let text = await readBoundedResponseText(res, 8 * 1024 * 1024);
+  if (!res.ok) {
+    for (const [name, value] of Object.entries(headers)) {
+      if (name.toLowerCase() === 'x-instance-id') continue;
+      const credential = String(value).replace(/^Bearer /i, '');
+      if (credential) text = text.replaceAll(credential, '[redacted]');
+    }
+  }
   let json = null;
   try {
     json = text ? JSON.parse(text) : null;

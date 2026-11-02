@@ -568,3 +568,42 @@ describe('bench-http-bridge', () => {
     }
   });
 });
+
+
+describe('credentialed bridge response limits', () => {
+  it.each(['normal', 'redirect', 'declared', 'streamed', 'private-error', 'transport-error'])('guards %s responses at the real stdio boundary', async (mode) => {
+    const dir = makeTempDir();
+    const configPath = resolve(dir, 'bench-cowork.json');
+    const preload = resolve(dir, 'fetch.cjs');
+    const callsPath = resolve(dir, 'calls.json');
+    writeConfig(configPath, { bench_api_base: 'https://benchagi.com/api/v1', bench_cowork_token: 'fake-private-token' });
+    writeFileSync(preload, `
+      global.fetch = async (_url, init) => {
+        require('node:fs').writeFileSync(${JSON.stringify(callsPath)}, JSON.stringify({redirect: init.redirect}));
+        const mode = ${JSON.stringify(mode)};
+        if (mode === 'private-error') return new Response('fake-private-token', {status: 500});
+        if (mode === 'transport-error') throw new Error('fake-private-token');
+        if (mode === 'redirect') return new Response('fake-private-token', {status: 302});
+        if (mode === 'declared') return new Response('small', {headers: {'content-length': String(8 * 1024 * 1024 + 1)}});
+        if (mode === 'streamed') return new Response('x'.repeat(8 * 1024 * 1024 + 1));
+        return new Response('{"status":"queued"}');
+      };
+    `);
+    const bridge = spawnBridge(configPath, forgeManifestPath, { NODE_OPTIONS: `--require ${JSON.stringify(preload)}` });
+    bridge.send({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: {
+      name: 'forge_ticket_status', arguments: { ticketId: 'fgt_cccccccccccccccccccccccccccccccc' },
+    } });
+    const [message] = await bridge.waitForMessageCount(1);
+    const result = message.result as { content: Array<{ text: string }>; isError?: boolean };
+    expect(JSON.parse(readFileSync(callsPath, 'utf8')).redirect).toBe('error');
+    if (mode === 'normal') {
+      expect(result.isError).not.toBe(true);
+      expect(JSON.parse(result.content[0].text)).toEqual({ status: 'queued' });
+    } else {
+      expect(result.isError).toBe(true);
+      if (mode === 'redirect') expect(result.content[0].text).toMatch(/redirect/);
+      if (mode === 'declared' || mode === 'streamed') expect(result.content[0].text).toMatch(/response too large/);
+      expect(result.content[0].text).not.toContain('fake-private-token');
+    }
+  });
+});
