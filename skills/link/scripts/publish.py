@@ -2,6 +2,8 @@
 """Publish a locked HTML folder as a Bench Page. Never prints secrets."""
 from __future__ import annotations
 
+from publish_control import PublishControlError, create_checked, select_access, replace_checked
+
 import argparse
 import json
 import mimetypes
@@ -409,7 +411,45 @@ def revoke(slug: str) -> None:
     print(f"Revoked: {base_url()}/s/{encoded_slug}")
 
 
-def publish(folder: Path, title: str | None, expires: str | None, dry_run: bool) -> None:
+def replace_files(url, headers, staged, files, access):
+    boundary = f"----BenchLink{uuid4().hex}"
+    parts = [f'--{boundary}\r\nContent-Disposition: form-data; name="accessPolicy"\r\n\r\n{access}\r\n'.encode()]
+    for relative in files:
+        path = staged / relative
+        filename = "".join(c if 0x20 <= ord(c) <= 0x7e and c not in {'"', "\\"} else "_" for c in path.name)
+        parts.append((f'--{boundary}\r\nContent-Disposition: form-data; name="path"\r\n\r\n{relative}\r\n'
+                      f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{filename}"\r\nContent-Type: {content_type_for(path)}\r\n\r\n').encode())
+        parts.extend([path.read_bytes(), b"\r\n"])
+    parts.append(f"--{boundary}--\r\n".encode())
+    req = urllib.request.Request(url, data=b"".join(parts), headers={**headers, "Content-Type": f"multipart/form-data; boundary={boundary}"}, method="POST")
+    try:
+        with NO_REDIRECT_OPENER.open(req) as response:
+            result = json.loads(response.read())
+    except (urllib.error.URLError, ValueError) as error:
+        raise LinkError("Replacement failed; no create fallback was attempted.") from error
+    return result
+
+
+def replace(folder, slug, access=None, dry_run=False):
+    if len(slug) != 22 or not all(c.isascii() and (c.isalnum() or c in "_-") for c in slug):
+        raise LinkError("Invalid replacement slug.")
+    with tempfile.TemporaryDirectory(prefix="bench-link-replace-") as tmp:
+        staged = Path(tmp) / "page"
+        files = stage(folder, staged, [])
+        if dry_run:
+            print(f"dry-run replace: {slug}; files: {len(files)}")
+            return
+        headers = auth_headers()
+        endpoint = base_url() + "/api/bench-share"
+        result = replace_checked(request_json, lambda audience: replace_files(endpoint + "/" + slug + "/replace", headers, staged, files, audience), endpoint, headers, slug, requested=access)
+        policy = result["accessPolicy"]
+        print(f"Look: {base_url()}/api/bench-share/{slug}/asset/index.html" if policy == "public" else f"Look: {base_url()}/app/bench-pages/{slug}")
+        print(f"Forward: {base_url()}/s/{slug}")
+        print(f"Audience: {policy}")
+
+
+def publish(folder: Path, title: str | None, expires: str | None, dry_run: bool, access: str | None = None) -> None:
+    access = select_access(access)
     days = parse_expires(expires)
     shown_title = clean_title(title or (folder.stem if folder.is_file() else folder.name))
     with tempfile.TemporaryDirectory(prefix="bench-link-") as tmp:
@@ -432,7 +472,7 @@ def publish(folder: Path, title: str | None, expires: str | None, dry_run: bool)
         payload: dict = {"title": shown_title, "kind": "page"}
         if days is not None:
             payload["expiresInDays"] = days
-        created = request_json("POST", f"{base_url()}/api/bench-share", headers, payload)
+        created = create_checked(request_json, f"{base_url()}/api/bench-share", headers, payload, access)
         slug = created.get("slug")
         if not isinstance(slug, str) or not slug:
             raise LinkError("Bench API create response did not include a slug.")
@@ -450,6 +490,9 @@ def publish(folder: Path, title: str | None, expires: str | None, dry_run: bool)
             print(f"Publish stopped after creating {url}.", file=sys.stderr)
             print(f"Revoke: python3 {SELF} --revoke {slug}", file=sys.stderr)
             raise
+        print(f"Look: {base_url()}/api/bench-share/{encoded_slug}/asset/index.html" if access == "public" else f"Look: {base_url()}/app/bench-pages/{encoded_slug}")
+        print(f"Forward: {url}")
+        print(f"Audience: {access}")
         print(f"Published: {url}")
         print(f"Revoke: python3 {SELF} --revoke {slug}")
 
@@ -581,6 +624,10 @@ def selftest() -> None:
         with redirect_stdout(dry_run_out), redirect_stderr(StringIO()):
             publish(folder, title="Selftest", expires=None, dry_run=True)
         assert "dry-run files: 2" in dry_run_out.getvalue(), dry_run_out.getvalue()
+    import unittest
+    suite = unittest.defaultTestLoader.discover(str(SELF.parent), pattern="test_publish_control.py")
+    if not unittest.TextTestRunner(stream=sys.stderr).run(suite).wasSuccessful():
+        die("publish control selftest failed")
     print("selftest ok")
 
 
@@ -588,8 +635,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Publish a Bench Page at /s/{slug}.")
     parser.add_argument("source", nargs="?", help="HTML file or folder with index.html")
     parser.add_argument("--title")
+    parser.add_argument("--access", choices=["workspace", "workspace_managers", "public"])
     parser.add_argument("--expires-in-days")
     parser.add_argument("--revoke")
+    parser.add_argument("--replace")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args()
@@ -598,6 +647,8 @@ def main() -> None:
         selftest()
         return
     try:
+        if args.revoke and args.replace:
+            die("Choose either --revoke or --replace.")
         if args.revoke:
             if args.dry_run:
                 print(f"dry-run revoke: {args.revoke}")
@@ -609,8 +660,11 @@ def main() -> None:
         source = Path(args.source).expanduser().resolve()
         if not source.exists():
             die(f"link: missing path: {source}")
-        publish(source, args.title, args.expires_in_days, args.dry_run)
-    except LinkError as err:
+        if args.replace:
+            replace(source, args.replace, args.access, args.dry_run)
+            return
+        publish(source, args.title, args.expires_in_days, args.dry_run, args.access)
+    except (LinkError, PublishControlError) as err:
         die(str(err))
 
 
