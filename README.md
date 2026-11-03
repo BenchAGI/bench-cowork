@@ -140,5 +140,6 @@ and ends with “Run /bench-login to sign this Mac in again.”
   expired, deleted, rebound, or its person is no longer a live owner or admin of its workspace.
 
 New main-project sign-ins create a revocable connection. Tenant-session sign-ins
-and older tokens keep their existing refresh behavior. Both refresh chains remain
-limited to 30 days, with a 7-day access token.
+and older tokens keep their existing refresh behavior. Connections renew for 90 days
+and can be revoked from the account Security tab under **Signed-in Macs**. Legacy
+chains remain limited to 30 days. Access tokens still last 7 days.

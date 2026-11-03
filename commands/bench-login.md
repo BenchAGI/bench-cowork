@@ -12,8 +12,10 @@ Authenticate `$ARGUMENTS` (optional email) with BenchAGI via Path A (simple past
 2. **Tell the user to open the auth page** in their browser:
 
    ```
-   https://benchagi.com/auth/cowork?email=<email>
+   https://benchagi.com/auth/cowork?email=<email>&device=<URL-encoded computer name>
    ```
+
+   Read the computer name with `scutil --get ComputerName` and URL-encode it (for example, pass the name as an argument to `python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))'`). Append that encoded value as `device`; keep the token copy-paste steps below unchanged. If the computer name is unavailable, omit `device`.
 
    (Use the base from `~/.claude/config/bench-cowork.json` `bench_api_base` if set to a non-prod URL; otherwise default to https://benchagi.com.)
 
