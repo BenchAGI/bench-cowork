@@ -127,3 +127,18 @@ tools/bench-cowork/
 ### Known limits
 
 - **Path B OAuth device-code** is deferred — only pilot customers who block on it should trigger it.
+
+### Connection refusals
+
+These HTTP 401 codes mean **sign in again**. Each response explains what happened
+and ends with “Run /bench-login to sign this Mac in again.”
+
+- `COWORK_CONNECTION_REVOKED`: this Mac was signed out from account security.
+- `COWORK_CONNECTION_UNKNOWN`: the signed connection no longer exists.
+- `COWORK_CONNECTION_MISMATCH`: the connection does not match the signed person or refresh root.
+- `COWORK_CONNECTION_KEY_INACTIVE`: renewal failed because the install key is inactive,
+  expired, deleted, rebound, or its person is no longer a live owner or admin of its workspace.
+
+New main-project sign-ins create a revocable connection. Tenant-session sign-ins
+and older tokens keep their existing refresh behavior. Both refresh chains remain
+limited to 30 days, with a 7-day access token.
