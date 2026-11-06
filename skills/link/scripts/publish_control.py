@@ -2,6 +2,19 @@
 POLICIES = ("public", "workspace", "workspace_managers")
 
 
+INTERNAL_NEXT_STEP = ("For a prospect or customer: publish a new link with --access public and revoke this one. "
+                      "An Internal link cannot be made External.")
+AUDIENCE_NOTICES = {
+    "public": ("Who can open: External. Anyone with the link, no sign-in.",),
+    "workspace": ("Who can open: Internal. Only signed-in people in this workspace. "
+                  "Anyone else, including a prospect or customer, is stopped at the Bench sign-in page.",
+                  INTERNAL_NEXT_STEP),
+    "workspace_managers": ("Who can open: Internal. Only signed-in workspace managers and above. "
+                           "Anyone else, including a prospect or customer, is stopped at the Bench sign-in page.",
+                           INTERNAL_NEXT_STEP),
+}
+
+
 class PublishControlError(ValueError):
     pass
 
@@ -15,6 +28,11 @@ def select_access(requested=None, saved=None):
     if saved is not None and access != saved:
         raise PublishControlError("Replacement cannot change audience.")
     return access
+
+
+def audience_notice(access):
+    """Plain lines saying who can open the link, so nobody forwards a sign-in page by mistake."""
+    return AUDIENCE_NOTICES[access]
 
 
 def require_capability(response):

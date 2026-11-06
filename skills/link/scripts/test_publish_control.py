@@ -38,6 +38,76 @@ class PublishControlTests(unittest.TestCase):
                     error = exc
                 return calls, upload.call_count, error
 
+    def published_output(self, access):
+        import publish
+        def request(method, url, headers, payload=None):
+            return CAPABILITY if method == "GET" else {"slug": SLUG, "accessPolicy": access or "workspace"}
+        out = StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            page = Path(tmp) / "index.html"
+            page.write_text("<h1>fixture</h1>")
+            with patch.object(publish, "request_json", side_effect=request), patch.object(publish, "upload_file"), \
+                    patch.object(publish, "auth_headers", return_value={"Authorization": "Bearer fixture"}), \
+                    patch.object(publish, "base_url", return_value="https://fixture.invalid"), redirect_stdout(out):
+                publish.publish(page, "Fixture", None, False, access)
+        return out.getvalue()
+
+    def replaced_output(self, access):
+        import publish
+        out = StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            page = Path(tmp) / "index.html"
+            page.write_text("<h1>fixture</h1>")
+            def request(method, url, headers, payload=None):
+                return {"accessPolicy": access} if url.endswith("/replace") else CAPABILITY
+            with patch.object(publish, "request_json", side_effect=request), \
+                    patch.object(publish, "replace_files", return_value={"accessPolicy": access}), \
+                    patch.object(publish, "auth_headers", return_value={"Authorization": "Bearer fixture"}), \
+                    patch.object(publish, "base_url", return_value="https://fixture.invalid"), redirect_stdout(out):
+                publish.replace(page, SLUG, access)
+        return out.getvalue()
+
+    def test_published_output_says_who_can_open_the_link(self):
+        external = self.published_output("public")
+        self.assertIn("Who can open: External. Anyone with the link, no sign-in.", external)
+        self.assertNotIn("sign-in page", external)
+        for access in (None, "workspace", "workspace_managers"):
+            with self.subTest(access=access):
+                internal = self.published_output(access)
+                self.assertIn("Who can open: Internal.", internal)
+                self.assertIn("stopped at the Bench sign-in page", internal)
+                self.assertIn("--access public", internal)
+
+    def test_replaced_output_says_who_can_open_the_link(self):
+        for access in ("public", "workspace", "workspace_managers"):
+            with self.subTest(access=access):
+                output = self.replaced_output(access)
+                self.assertIn("Who can open:", output)
+                if access == "public":
+                    self.assertIn("External. Anyone with the link, no sign-in.", output)
+                    self.assertNotIn("sign-in page", output)
+                else:
+                    self.assertIn("Internal.", output)
+                    self.assertIn("stopped at the Bench sign-in page", output)
+                    self.assertIn("--access public", output)
+
+    def test_command_and_skill_do_not_promise_every_link_opens_without_sign_in(self):
+        plugin = Path(__file__).resolve().parents[3]
+        command = (plugin / "commands" / "link.md").read_text()
+        skill = (plugin / "skills" / "link" / "SKILL.md").read_text()
+        for name, text in (("command", command), ("skill", skill)):
+            with self.subTest(name=name):
+                self.assertNotIn("Anyone with the URL can open it without logging in", text)
+                self.assertNotIn("Recipients do not log in", text)
+                self.assertIn("--access public", text)
+                self.assertRegex(text, "prospect")
+
+    def test_both_plugin_manifests_ship_the_same_version(self):
+        plugin = Path(__file__).resolve().parents[3]
+        versions = {json.loads(path.read_text())["version"]
+                    for path in (plugin / "plugin.json", plugin / ".claude-plugin" / "plugin.json")}
+        self.assertEqual(len(versions), 1)
+
     def test_old_unknown_malformed_unauthorized_fail_before_metadata(self):
         for value in ({}, [], None, {**CAPABILITY, "version": 1}, {**CAPABILITY, "version": True},
                       {**CAPABILITY, "accessPolicies": "workspace"}, PermissionError("unauthorized")):

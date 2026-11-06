@@ -20,7 +20,13 @@ Requires `/bench-login` first (or `BENCH_API_KEY` / `BENCH_AUTH_TOKEN` / `BENCH_
 ## Do
 
 1. Confirm a folder with `index.html`, or a single `.html` file. If they are still punching localhost, do not publish unless they said `/link` now.
-2. Select the audience before publishing. Run the helper next to this file. Do not print tokens.
+2. Select the audience before publishing:
+   - **Going to anyone outside the workspace** (a prospect, customer, homeowner or partner, or anyone without a Bench login): use `--access public`. Without it they land on the Bench sign-in page.
+   - **For the team**: leave the Internal default, or use `--access workspace_managers` for managers.
+   - **Not clear who will open it**: ask before publishing.
+   - **Commissions, pay, rates or other private business material**: never `--access public`. If a page meant for a prospect contains any of it, stop and ask.
+
+   An Internal link cannot be made External. To share one outside the workspace, publish a new link with `--access public` and revoke the old one. Run the helper next to this file. Do not print tokens.
 
 ```bash
 python3 <this-skill-dir>/scripts/publish.py --selftest
@@ -38,7 +44,7 @@ Replacement first reads the saved audience from the authenticated mutation prefl
 
 `scripts/publish_control.py` and `scripts/publish-control.js` are reusable audience controls. The JS mount presents the audience before creation and locks the saved audience on replacement. The private localhost range-server adapter remains outside this repository and staged until the deployed API advertises support; these files do not activate it.
 
-3. Give them the printed `https://benchagi.com/s/{slug}` and the revoke command. Do not email the URL unless they ask.
+3. Give them the printed `https://benchagi.com/s/{slug}`, the printed `Who can open` line and the revoke command. Do not email the URL unless they ask.
 
 Staging drops markdown, verify scripts, source maps, symlinks, and secret-looking
 files (`.env*`, keys, service-account JSON). Every drop is printed with its reason

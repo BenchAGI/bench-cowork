@@ -2,7 +2,7 @@
 """Publish a locked HTML folder as a Bench Page. Never prints secrets."""
 from __future__ import annotations
 
-from publish_control import PublishControlError, create_checked, select_access, replace_checked
+from publish_control import PublishControlError, audience_notice, create_checked, select_access, replace_checked
 
 import argparse
 import json
@@ -446,6 +446,7 @@ def replace(folder, slug, access=None, dry_run=False):
         print(f"Look: {base_url()}/api/bench-share/{slug}/asset/index.html" if policy == "public" else f"Look: {base_url()}/app/bench-pages/{slug}")
         print(f"Forward: {base_url()}/s/{slug}")
         print(f"Audience: {policy}")
+        print("\n".join(audience_notice(policy)))
 
 
 def publish(folder: Path, title: str | None, expires: str | None, dry_run: bool, access: str | None = None) -> None:
@@ -493,6 +494,7 @@ def publish(folder: Path, title: str | None, expires: str | None, dry_run: bool,
         print(f"Look: {base_url()}/api/bench-share/{encoded_slug}/asset/index.html" if access == "public" else f"Look: {base_url()}/app/bench-pages/{encoded_slug}")
         print(f"Forward: {url}")
         print(f"Audience: {access}")
+        print("\n".join(audience_notice(access)))
         print(f"Published: {url}")
         print(f"Revoke: python3 {SELF} --revoke {slug}")
 
