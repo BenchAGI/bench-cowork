@@ -8,6 +8,7 @@ import argparse
 import json
 import mimetypes
 import os
+import re
 import shutil
 import stat
 import sys
@@ -21,8 +22,10 @@ from urllib.parse import quote, urlsplit, urlunsplit
 from uuid import uuid4
 
 SELF = Path(__file__).resolve()
-COWORK_CONFIG = Path.home() / ".claude" / "config" / "bench-cowork.json"
 DEFAULT_BASE = "https://benchagi.com"
+# Same names and cap as tools/bench-cowork/servers/bench-http-bridge.js (#17232).
+PROFILE_REGISTRY_ENTRY = re.compile(r"[a-z0-9][a-z0-9-]{1,63}\.json")
+PROFILE_RECORD_MAX_BYTES = 65536
 
 # Mirrors apps/web/src/lib/bench-share/types.ts. Checked locally so a folder that
 # cannot fit is refused BEFORE a live public share exists.
@@ -254,11 +257,81 @@ def parse_expires(value: str | None) -> int | None:
     return days
 
 
+def registry_record_is_separate(record_path: Path) -> bool:
+    """True unless this registry record is a readable company that uses ~/.claude."""
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    descriptor = -1
+    try:
+        # O_NOFOLLOW and O_NONBLOCK: a link or FIFO planted here must not hang the helper.
+        descriptor = os.open(record_path, flags)
+        entry = os.fstat(descriptor)
+        if not stat.S_ISREG(entry.st_mode) or entry.st_size > PROFILE_RECORD_MAX_BYTES:
+            return True
+        with os.fdopen(descriptor, "rb") as handle:
+            descriptor = -1
+            raw = handle.read(PROFILE_RECORD_MAX_BYTES + 1)
+        if len(raw) > PROFILE_RECORD_MAX_BYTES:
+            return True
+        record = json.loads(raw.decode("utf-8"))
+    except (OSError, ValueError, RecursionError):
+        return True
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    return not isinstance(record, dict) or "isolation" in record
+
+
+def separate_company_registered() -> bool:
+    """True when the Aurelius seat kit registered a company with its own Claude root.
+
+    The kit records each company under ~/.aurelius/profile-registry/<id>.json; a
+    record with an `isolation` field keeps its login under that company's own
+    Claude root, and its launcher names that file in BENCH_COWORK_CONFIG. Without
+    that name the helper cannot tell which company's seat ran it, so ~/.claude's
+    login may be another company's. A registry or record it cannot read counts.
+    """
+    registry = Path.home() / ".aurelius" / "profile-registry"
+    try:
+        names = os.listdir(registry)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    except OSError:
+        return True
+    return any(
+        registry_record_is_separate(registry / name)
+        for name in names
+        if PROFILE_REGISTRY_ENTRY.fullmatch(name)
+    )
+
+
+def cowork_config_path() -> Path:
+    """The Bench login file this session may read; LinkError when none may be (#17232)."""
+    configured = os.environ.get("BENCH_COWORK_CONFIG")
+    if configured:
+        path = Path(configured)
+        if not path.is_absolute():
+            raise LinkError("link: signed out of Bench: BENCH_COWORK_CONFIG must be an absolute path.")
+        return path
+    if separate_company_registered():
+        raise LinkError(
+            "link: signed out of Bench: BENCH_COWORK_CONFIG is not set, and this Mac has a Bench "
+            "company seat with its own Claude config (~/.aurelius/profile-registry), so the "
+            "~/.claude login, which may be another company's, was not used. Start Claude from that "
+            "company's Aurelius launcher, or set BENCH_COWORK_CONFIG to that company's own "
+            "config/bench-cowork.json."
+        )
+    return Path.home() / ".claude" / "config" / "bench-cowork.json"
+
+
 def load_cowork_config() -> dict:
-    if not COWORK_CONFIG.is_file():
+    try:
+        config_path = cowork_config_path()
+    except LinkError:
+        return {}
+    if not config_path.is_file():
         return {}
     try:
-        data = json.loads(COWORK_CONFIG.read_text(encoding="utf-8"))
+        data = json.loads(config_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return {}
     return data if isinstance(data, dict) else {}
@@ -318,6 +391,7 @@ def auth_headers() -> dict[str, str]:
     )
     if bearer:
         return {"Authorization": f"Bearer {bearer}"}
+    cowork_config_path()  # A refused login file says why instead of "run /bench-login".
     raise LinkError(
         "link: run /bench-login, or set BENCH_API_KEY / BENCH_AUTH_TOKEN / BENCH_COWORK_TOKEN."
     )

@@ -1,4 +1,5 @@
 import json
+import os
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -229,6 +230,115 @@ const capability = JSON.parse(process.argv[2]);
 '''
         result = subprocess.run(["node", "-e", code, module, json.dumps(CAPABILITY)], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+
+
+class CompanyLoginTests(unittest.TestCase):
+    """#17232: on a Mac with two companies, /link reads only the company's own login."""
+
+    AUTH_ENV = ("BENCH_COWORK_CONFIG", "BENCH_API_KEY", "BENCH_AUTH_TOKEN", "BENCH_COWORK_TOKEN",
+                "BENCH_API_BASE_URL", "BENCH_API_BASE")
+
+    def seat_home(self, registry):
+        """A HOME whose ~/.claude holds the primary company's login, plus `registry` records."""
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        home = Path(directory.name)
+        self.write_login(home / ".claude" / "config" / "bench-cowork.json", "primary-token", "https://primary.invalid")
+        if registry is not None:
+            (home / ".aurelius" / "profile-registry").mkdir(parents=True)
+            for name, record in registry.items():
+                text = record if isinstance(record, str) else json.dumps(record)
+                (home / ".aurelius" / "profile-registry" / name).write_text(text)
+        env = {key: value for key, value in os.environ.items() if key not in self.AUTH_ENV}
+        environment = patch.dict(os.environ, {**env, "HOME": str(home)}, clear=True)
+        environment.start()
+        self.addCleanup(environment.stop)
+        return home
+
+    @staticmethod
+    def write_login(path, token, base):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"bench_cowork_token": token, "bench_api_base": base}))
+
+    def company_login(self, home):
+        path = home / ".aurelius" / "profiles" / "company-alpha" / "claude" / "config" / "bench-cowork.json"
+        self.write_login(path, "alpha-token", "https://alpha.invalid")
+        return path
+
+    def assert_signed_out(self, reason="BENCH_COWORK_CONFIG is not set"):
+        import publish
+        with self.assertRaises(publish.LinkError) as raised:
+            publish.auth_headers()
+        self.assertIn("signed out of Bench", str(raised.exception))
+        self.assertIn(reason, str(raised.exception))
+        self.assertEqual(publish.base_url(), publish.DEFAULT_BASE)
+
+    ISOLATED = {"company-alpha.json": {"profileId": "company-alpha", "isolation": "profile"}}
+
+    def test_named_company_login_is_used(self):
+        import publish
+        home = self.seat_home(self.ISOLATED)
+        os.environ["BENCH_COWORK_CONFIG"] = str(self.company_login(home))
+        self.assertEqual(publish.auth_headers(), {"Authorization": "Bearer alpha-token"})
+        self.assertEqual(publish.base_url(), "https://alpha.invalid")
+
+    def test_unnamed_login_with_an_isolated_company_refuses_and_sends_nothing(self):
+        import publish
+        home = self.seat_home(self.ISOLATED)
+        self.company_login(home)
+        self.assert_signed_out()
+        with tempfile.TemporaryDirectory() as tmp:
+            page = Path(tmp) / "index.html"
+            page.write_text("<h1>fixture</h1>")
+            with patch.object(publish, "request_json") as request, patch.object(publish, "upload_file") as upload, \
+                    patch.object(publish, "replace_files") as replace_files, redirect_stdout(StringIO()):
+                for send in (lambda: publish.publish(page, "Fixture", None, False),
+                             lambda: publish.replace(page, SLUG), lambda: publish.revoke(SLUG)):
+                    with self.assertRaisesRegex(publish.LinkError, "signed out of Bench"):
+                        send()
+            self.assertEqual((request.call_count, upload.call_count, replace_files.call_count), (0, 0, 0))
+
+    def test_unreadable_registry_records_refuse_the_claude_login(self):
+        for label, record in (("not JSON", "{not json"), ("not an object", "null"),
+                              ("over 64 KB", json.dumps({"pad": "x" * 65536}))):
+            with self.subTest(record=label):
+                self.seat_home({"company-alpha.json": record})
+                self.assert_signed_out()
+        for kind in ("symlink", "fifo", "directory"):
+            with self.subTest(record=kind):
+                home = self.seat_home({})
+                record = home / ".aurelius" / "profile-registry" / "company-alpha.json"
+                if kind == "symlink":
+                    target = home / "company-primary.json"
+                    target.write_text(json.dumps({"profileId": "company-primary"}))
+                    record.symlink_to(target)
+                elif kind == "fifo":
+                    os.mkfifo(record)
+                else:
+                    record.mkdir()
+                self.assert_signed_out()
+
+    def test_relative_named_login_is_refused(self):
+        self.seat_home(None)
+        os.environ["BENCH_COWORK_CONFIG"] = "config/bench-cowork.json"
+        self.assert_signed_out("must be an absolute path")
+
+    def test_claude_login_is_kept_without_a_separate_company(self):
+        import publish
+        for label, registry in (("no registry", None), ("empty registry", {}),
+                                ("only a ~/.claude company", {"company-primary.json": {"profileId": "company-primary"}}),
+                                ("files that are not records", {"README.md": "{", "Company-Alpha.json": "{"})):
+            with self.subTest(registry=label):
+                self.seat_home(registry)
+                self.assertEqual(publish.auth_headers(), {"Authorization": "Bearer primary-token"})
+                self.assertEqual(publish.base_url(), "https://primary.invalid")
+
+    def test_an_exported_token_still_works_when_the_file_login_is_refused(self):
+        import publish
+        self.seat_home(self.ISOLATED)
+        os.environ["BENCH_COWORK_TOKEN"] = "exported-token"
+        self.assertEqual(publish.auth_headers(), {"Authorization": "Bearer exported-token"})
 
 
 if __name__ == "__main__":
