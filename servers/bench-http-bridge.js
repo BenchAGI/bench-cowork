@@ -12,9 +12,12 @@
  *   over stdio per the MCP stdio transport.
  * - The manifest drives everything: each tools[] entry's method/path/query_params/
  *   body_schema becomes a registered MCP tool.
- * - Auth state is re-read from ~/.claude/config/bench-cowork.json ON EVERY CALL, so
- *   a fresh /bench-login (or another bridge process refreshing the token) is picked
- *   up without restarting the server.
+ * - Auth state is re-read from BENCH_COWORK_CONFIG (default
+ *   ~/.claude/config/bench-cowork.json) ON EVERY CALL, so a fresh /bench-login (or
+ *   another bridge process refreshing the token) is picked up without restarting
+ *   the server. On a Mac where the seat kit registered a company with its own
+ *   Claude root, the default is refused: that company's launcher names its own
+ *   file, and ~/.claude's login may belong to another company (#17232).
  * - A cached bench_instance_id is validated and forwarded as X-Instance-Id on
  *   bearer application calls so multi-workspace users stay on the tenant selected
  *   during login. API-key and token-refresh calls never inherit that header.
@@ -60,9 +63,66 @@ const toolsByName = new Map(manifest.tools.map((tool) => [tool.name, tool]));
 
 // --- config (re-read per call so logins/refreshes are picked up live) --------
 
+const PROFILE_REGISTRY_ENTRY = /^[a-z0-9][a-z0-9-]{1,63}\.json$/;
+const PROFILE_RECORD_MAX_BYTES = 65536; // the seat kit's own cap on a registry record
+
+/**
+ * True when the Aurelius seat kit has registered a company on this Mac whose
+ * Claude root is not ~/.claude (#17232). The kit records every company it
+ * installs under ~/.aurelius/profile-registry/<profileId>.json; a record with
+ * an `isolation` field is a company whose Claude root, and so its
+ * bench-cowork.json, lives under ~/.aurelius/profiles/<profileId>/claude. Its
+ * launcher names that file in BENCH_COWORK_CONFIG. A bridge started without
+ * that name cannot tell which company's seat started it, so it must not use
+ * ~/.claude's login, which belongs to another company or to nobody here. A
+ * registry or record the bridge cannot read counts as such a company.
+ */
+function separateCompanyRegistered() {
+  const registry = path.join(os.homedir(), '.aurelius', 'profile-registry');
+  let names;
+  try {
+    names = fs.readdirSync(registry);
+  } catch (error) {
+    return error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR';
+  }
+  return names.some((name) => {
+    if (!PROFILE_REGISTRY_ENTRY.test(name)) return false;
+    let descriptor = null;
+    try {
+      // Same open as readConfig: a link or FIFO planted here must not hang the bridge.
+      descriptor = fs.openSync(
+        path.join(registry, name),
+        fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | (fs.constants.O_NONBLOCK || 0),
+      );
+      const entry = fs.fstatSync(descriptor);
+      if (!entry.isFile() || entry.size > PROFILE_RECORD_MAX_BYTES) return true;
+      const record = JSON.parse(fs.readFileSync(descriptor, 'utf8'));
+      return !record || typeof record !== 'object' || record.isolation !== undefined;
+    } catch {
+      return true;
+    } finally {
+      try {
+        if (descriptor !== null) fs.closeSync(descriptor);
+      } catch {
+        // The answer is already decided; a close error must not change it.
+      }
+    }
+  });
+}
+
 function configPath() {
-  const configuredPath = process.env.BENCH_COWORK_CONFIG
-    || path.join(os.homedir(), '.claude', 'config', 'bench-cowork.json');
+  let configuredPath = process.env.BENCH_COWORK_CONFIG;
+  if (!configuredPath) {
+    if (separateCompanyRegistered()) {
+      throw new Error(
+        'BENCH_COWORK_CONFIG is not set, and this Mac has a Bench company seat with its own Claude ' +
+          'config (~/.aurelius/profile-registry), so the bridge will not use the ~/.claude login, ' +
+          "which may be another company's. Start Claude from that company's Aurelius launcher, or " +
+          "set BENCH_COWORK_CONFIG to that company's own config/bench-cowork.json."
+      );
+    }
+    configuredPath = path.join(os.homedir(), '.claude', 'config', 'bench-cowork.json');
+  }
   if (!path.isAbsolute(configuredPath)) {
     throw new Error('BENCH_COWORK_CONFIG must be an absolute path');
   }
@@ -332,6 +392,9 @@ function errorCode(response) {
 }
 
 async function refreshToken(base, staleToken) {
+  // Resolve where the refreshed token will be saved before asking for one: a
+  // refused config path fails here, not after the server has minted a token.
+  configPath();
   const response = await httpCall(
     { method: 'POST', path: REFRESH_PATH },
     {},
@@ -392,8 +455,14 @@ async function callTool(tool, args) {
 
   let token = resolveBearerToken(config);
   if (!token) {
+    let file;
+    try {
+      file = configPath();
+    } catch (err) {
+      return toolError(`Signed out of Bench: ${err.message}`);
+    }
     return toolError(
-      'No cowork token found. Run /bench-login (writes ~/.claude/config/bench-cowork.json) or export BENCH_COWORK_TOKEN.'
+      `No cowork token found. Run /bench-login (writes ${file}) or export BENCH_COWORK_TOKEN.`
     );
   }
   let response = await httpCall(tool, args, bearerHeaders(config, token), base);

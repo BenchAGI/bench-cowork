@@ -68,8 +68,13 @@ handles session-driven asks.
 
 Registered HTTP manifests in `mcp/` are served by **one** generic, dependency-free stdio MCP
 server: `servers/bench-http-bridge.js <manifest.json>`. It registers the manifest's
-tools, re-reads `~/.claude/config/bench-cowork.json` on every call (so a fresh
-`/bench-login` is picked up without a restart), pins bearer application calls to
+tools, re-reads its login from `BENCH_COWORK_CONFIG` (default
+`~/.claude/config/bench-cowork.json`) on every call (so a fresh `/bench-login` is
+picked up without a restart). On a Mac where the Aurelius seat kit installed a
+company with its own Claude config, that company's launcher sets
+`BENCH_COWORK_CONFIG` to its own file, and a bridge started without it reports
+signed out instead of using `~/.claude`'s login, which may be another company's.
+It pins bearer application calls to
 the strictly validated cached `bench_instance_id` via `X-Instance-Id`, and on a
 `401 COWORK_BAD_TOKEN` it
 auto-refreshes the cowork JWT via `POST /cowork/auth/refresh`, persists the new token

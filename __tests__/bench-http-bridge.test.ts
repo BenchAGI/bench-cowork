@@ -5,6 +5,7 @@ import {
   closeSync,
   constants,
   fstatSync,
+  mkdirSync,
   mkdtempSync,
   openSync,
   readFileSync,
@@ -16,7 +17,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const bridgePath = resolve(__dirname, '../servers/bench-http-bridge.js');
@@ -41,8 +42,10 @@ function makeTempDir(): string {
   return dir;
 }
 
+// `configPath: undefined` starts the bridge with no BENCH_COWORK_CONFIG at all
+// (spawn drops undefined variables), as a session the launcher did not start.
 function spawnBridge(
-  configPath: string,
+  configPath: string | undefined,
   manifestPath: string = forgeManifestPath,
   env: Record<string, string | undefined> = {},
 ) {
@@ -605,5 +608,157 @@ describe('credentialed bridge response limits', () => {
       if (mode === 'declared' || mode === 'streamed') expect(result.content[0].text).toMatch(/response too large/);
       expect(result.content[0].text).not.toContain('fake-private-token');
     }
+  });
+});
+
+// #17232: the Aurelius seat kit gives every company on a Mac but one its own
+// Claude root, ~/.aurelius/profiles/<profileId>/claude, and records each one it
+// installs in ~/.aurelius/profile-registry. ~/.claude belongs to the one
+// company that is not isolated, or to nobody.
+describe('two companies on one Mac', () => {
+  type Call = { authorization?: string; instanceId?: string };
+  // profileId -> registry record, or raw text for a record that is not JSON.
+  type Registry = Record<string, Record<string, unknown> | string>;
+
+  function seatHome(registry: Registry) {
+    const home = makeTempDir();
+    for (const [profileId, record] of Object.entries(registry)) {
+      const file = resolve(home, '.aurelius/profile-registry', `${profileId}.json`);
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, typeof record === 'string' ? record : JSON.stringify(record), { mode: 0o600 });
+    }
+    return home;
+  }
+
+  function companyConfig(home: string, profileId: string | null, token: string, instanceId: string, port: number) {
+    const file = profileId === null
+      ? resolve(home, '.claude/config/bench-cowork.json')
+      : resolve(home, '.aurelius/profiles', profileId, 'claude/config/bench-cowork.json');
+    mkdirSync(dirname(file), { recursive: true });
+    writeConfig(file, {
+      bench_api_base: `http://127.0.0.1:${port}/api/v1`,
+      bench_cowork_token: token,
+      bench_instance_id: instanceId,
+    });
+    return file;
+  }
+
+  async function withServer(run: (port: number, calls: Call[]) => Promise<void>) {
+    const calls: Call[] = [];
+    const server = createServer((req, res) => {
+      calls.push({
+        authorization: req.headers.authorization,
+        instanceId: req.headers['x-instance-id'] as string | undefined,
+      });
+      json(res, 200, { ticketId: 'fgt_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', status: 'queued' });
+    });
+    await new Promise<void>((resolveListen) => server.listen(0, '127.0.0.1', resolveListen));
+    try {
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('server did not bind to a port');
+      await run(address.port, calls);
+    } finally {
+      await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+    }
+  }
+
+  async function callForge(home: string, configPath: string | undefined) {
+    const bridge = spawnBridge(configPath, forgeManifestPath, {
+      HOME: home,
+      BENCH_COWORK_TOKEN: undefined,
+      BENCH_API_BASE: undefined,
+      bench_api_base: undefined,
+    });
+    bridge.send({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'forge_ticket_status', arguments: { ticketId: 'fgt_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee' } },
+    });
+    const [message] = await bridge.waitForMessageCount(1);
+    return message.result as { content: Array<{ text: string }>; isError?: boolean };
+  }
+
+  const isolated = (profileId: string) => ({ profileId, isolation: 'profile' });
+
+  it("has each company's bridge call Bench only as that company's own login", async () => {
+    await withServer(async (port, calls) => {
+      const home = seatHome({ 'company-alpha': isolated('company-alpha'), 'company-beta': isolated('company-beta') });
+      companyConfig(home, null, 'primary-token', 'tenant-primary', port);
+      const alpha = companyConfig(home, 'company-alpha', 'alpha-token', 'tenant-alpha-123', port);
+      const beta = companyConfig(home, 'company-beta', 'beta-token', 'tenant-beta-123', port);
+
+      expect((await callForge(home, alpha)).isError).not.toBe(true);
+      expect((await callForge(home, beta)).isError).not.toBe(true);
+      expect(calls).toEqual([
+        { authorization: 'Bearer alpha-token', instanceId: 'tenant-alpha-123' },
+        { authorization: 'Bearer beta-token', instanceId: 'tenant-beta-123' },
+      ]);
+    });
+  });
+
+  it("reports a company with no login as signed out instead of borrowing another company's", async () => {
+    await withServer(async (port, calls) => {
+      const home = seatHome({ 'company-alpha': isolated('company-alpha'), 'company-beta': isolated('company-beta') });
+      companyConfig(home, null, 'primary-token', 'tenant-primary', port);
+      companyConfig(home, 'company-alpha', 'alpha-token', 'tenant-alpha-123', port);
+      const beta = resolve(home, '.aurelius/profiles/company-beta/claude/config/bench-cowork.json');
+
+      const result = await callForge(home, beta);
+      expect(result.isError).toBe(true);
+      expect(result.content[0]?.text).toBe(
+        `No cowork token found. Run /bench-login (writes ${beta}) or export BENCH_COWORK_TOKEN.`,
+      );
+      expect(calls).toEqual([]);
+    });
+  });
+
+  it.each<{ label: string; registry: Registry }>([
+    { label: 'a registered company has its own Claude root', registry: { 'company-alpha': isolated('company-alpha') } },
+    { label: 'a registry record cannot be read', registry: { 'company-alpha': '{not json' } },
+  ])('refuses the ~/.claude login when no config was named and $label', async ({ registry }) => {
+    await withServer(async (port, calls) => {
+      const home = seatHome(registry);
+      companyConfig(home, null, 'primary-token', 'tenant-primary', port);
+
+      const result = await callForge(home, undefined);
+      expect(result.isError).toBe(true);
+      expect(result.content[0]?.text).toMatch(/^Signed out of Bench: BENCH_COWORK_CONFIG is not set/);
+      expect(calls).toEqual([]);
+    });
+  });
+
+  it.each(['link', 'fifo'] as const)('refuses, without hanging, when a registry record is a %s', async (kind) => {
+    await withServer(async (port, calls) => {
+      const home = seatHome({});
+      companyConfig(home, null, 'primary-token', 'tenant-primary', port);
+      const record = resolve(home, '.aurelius/profile-registry/company-alpha.json');
+      mkdirSync(dirname(record), { recursive: true });
+      if (kind === 'link') {
+        const target = resolve(home, 'company-primary.json');
+        writeFileSync(target, JSON.stringify({ profileId: 'company-primary' }));
+        symlinkSync(target, record);
+      } else {
+        execFileSync('mkfifo', [record]);
+      }
+
+      const result = await callForge(home, undefined);
+      expect(result.isError).toBe(true);
+      expect(result.content[0]?.text).toMatch(/^Signed out of Bench: BENCH_COWORK_CONFIG is not set/);
+      expect(calls).toEqual([]);
+    });
+  });
+
+  it.each<{ label: string; registry: Registry }>([
+    { label: 'no company is registered', registry: {} },
+    { label: 'the only registered company uses ~/.claude', registry: { 'company-primary': { profileId: 'company-primary' } } },
+  ])('keeps the ~/.claude login when no config was named and $label', async ({ registry }) => {
+    await withServer(async (port, calls) => {
+      const home = seatHome(registry);
+      companyConfig(home, null, 'primary-token', 'tenant-primary', port);
+
+      expect((await callForge(home, undefined)).isError).not.toBe(true);
+      expect(calls).toEqual([{ authorization: 'Bearer primary-token', instanceId: 'tenant-primary' }]);
+    });
   });
 });
