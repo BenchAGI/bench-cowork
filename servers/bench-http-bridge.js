@@ -38,6 +38,9 @@ const ALLOWED_API_BASES = new Set([
   'https://staging.benchagi.com/api/v1',
 ]);
 const REFRESH_PATH = '/cowork/auth/refresh';
+const REFRESH_TOOL = Object.freeze({ method: 'POST', path: REFRESH_PATH });
+const CONFIG_MAX_BYTES = 64 * 1024;
+const REQUEST_MAX_BYTES = 1024 * 1024;
 const INSTANCE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const HTTP_TIMEOUT_MS = Number(process.env.BENCH_BRIDGE_TIMEOUT_MS || 30000);
 
@@ -96,7 +99,7 @@ function separateCompanyRegistered() {
       );
       const entry = fs.fstatSync(descriptor);
       if (!entry.isFile() || entry.size > PROFILE_RECORD_MAX_BYTES) return true;
-      const record = JSON.parse(fs.readFileSync(descriptor, 'utf8'));
+      const record = JSON.parse(readBoundedConfigText(descriptor));
       return !record || typeof record !== 'object' || record.isolation !== undefined;
     } catch {
       return true;
@@ -135,6 +138,25 @@ function configPath() {
   return resolvedPath;
 }
 
+function readBoundedConfigText(descriptor) {
+  const tooLarge = () => {
+    const error = new Error('Cowork config exceeds 64 KiB');
+    error.code = 'COWORK_CONFIG_TOO_LARGE';
+    throw error;
+  };
+  if (fs.fstatSync(descriptor).size > CONFIG_MAX_BYTES) tooLarge();
+  // Bound the read too: the file may grow after fstat.
+  const buffer = Buffer.alloc(CONFIG_MAX_BYTES + 1);
+  let total = 0;
+  while (total < buffer.length) {
+    const count = fs.readSync(descriptor, buffer, total, buffer.length - total, null);
+    if (!count) break;
+    total += count;
+  }
+  if (total > CONFIG_MAX_BYTES) tooLarge();
+  return buffer.toString('utf8', 0, total);
+}
+
 function readConfig() {
   let descriptor = null;
   try {
@@ -145,8 +167,9 @@ function readConfig() {
     );
     const entry = fs.fstatSync(descriptor);
     if (!entry.isFile() || entry.nlink !== 1) return {};
-    return JSON.parse(fs.readFileSync(descriptor, 'utf8'));
-  } catch {
+    return JSON.parse(readBoundedConfigText(descriptor));
+  } catch (error) {
+    if (error.code === 'COWORK_CONFIG_TOO_LARGE') throw error;
     return {};
   } finally {
     try {
@@ -258,13 +281,27 @@ function ensurePrivateConfigDirectory(file) {
 }
 
 function persistToken(token, expiresInSeconds) {
+  if (typeof token !== 'string' || !/^[\x21-\x7e]+$/.test(token)
+      || Buffer.byteLength(token, 'utf8') > 8 * 1024) {
+    throw new Error('Invalid refreshed cowork token');
+  }
+  if (typeof expiresInSeconds !== 'number' || !Number.isFinite(expiresInSeconds)
+      || expiresInSeconds <= 0) {
+    throw new Error('Invalid refreshed cowork expiry');
+  }
+  const expiresAt = Date.now() + expiresInSeconds * 1000;
+  if (!Number.isFinite(new Date(expiresAt).getTime())) {
+    throw new Error('Invalid refreshed cowork expiry');
+  }
   const file = configPath();
-  const directory = ensurePrivateConfigDirectory(file);
   const config = readConfig();
   config.bench_cowork_token = token;
-  if (Number.isFinite(expiresInSeconds)) {
-    config.bench_cowork_expires_at = new Date(Date.now() + expiresInSeconds * 1000).toISOString();
+  config.bench_cowork_expires_at = new Date(expiresAt).toISOString();
+  const serialized = JSON.stringify(config, null, 2) + '\n';
+  if (Buffer.byteLength(serialized, 'utf8') > CONFIG_MAX_BYTES) {
+    throw new Error('Cowork config exceeds 64 KiB');
   }
+  const directory = ensurePrivateConfigDirectory(file);
   // Atomic: private, exclusive temp file in the same directory followed by rename.
   const tmp = path.join(
     directory,
@@ -281,7 +318,7 @@ function persistToken(token, expiresInSeconds) {
     if (!temporary.isFile() || temporary.nlink !== 1) {
       throw new Error('Cowork config temporary output must be an unlinked regular file');
     }
-    fs.writeFileSync(descriptor, JSON.stringify(config, null, 2) + '\n', 'utf8');
+    fs.writeFileSync(descriptor, serialized, 'utf8');
     fs.fchmodSync(descriptor, 0o600);
     fs.fsyncSync(descriptor);
     fs.closeSync(descriptor);
@@ -342,21 +379,44 @@ async function readBoundedResponseText(response, maxBytes) {
 }
 
 async function httpCall(tool, args, headers, base) {
+  if (tool !== REFRESH_TOOL && toolsByName.get(tool.name) !== tool) {
+    throw new Error('HTTP tool is not in the manifest');
+  }
+  const method = (tool.method || 'GET').toUpperCase();
+  if (!['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'].includes(method)) {
+    throw new Error('HTTP method is not allowed');
+  }
+  if (!args || typeof args !== 'object' || Array.isArray(args)) {
+    throw new Error('Tool arguments must be an object');
+  }
+  const schema = inputSchemaFor(tool);
+  for (const key of Object.keys(args)) {
+    if (!Object.hasOwn(schema.properties, key)) throw new Error('Unknown tool argument');
+  }
   const pathKeys = Array.isArray(tool.path_params) ? tool.path_params : [];
-  const url = new URL(base + buildPath(tool, args));
+  const resolvedPath = buildPath(tool, args);
+  if (!resolvedPath.startsWith('/') || resolvedPath.startsWith('//') || /[\\?#\s]/.test(resolvedPath)) {
+    throw new Error('HTTP path is not allowed');
+  }
+  const url = new URL(base + resolvedPath);
+  if (url.origin !== new URL(base).origin || url.pathname !== new URL(base).pathname + resolvedPath) {
+    throw new Error('HTTP path must match the manifest without normalization');
+  }
   const queryKeys = Array.isArray(tool.query_params) ? tool.query_params : [];
   for (const key of queryKeys) {
     if (args[key] != null) url.searchParams.set(key, String(args[key]));
   }
-  const method = (tool.method || 'GET').toUpperCase();
   const init = { method, redirect: 'error', headers: { ...headers }, signal: AbortSignal.timeout(HTTP_TIMEOUT_MS) };
   if (method !== 'GET' && method !== 'HEAD') {
-    const body = {};
+    const body = Object.create(null);
     for (const [key, value] of Object.entries(args)) {
       if (!queryKeys.includes(key) && !pathKeys.includes(key)) body[key] = value;
     }
     init.headers['Content-Type'] = 'application/json';
     init.body = JSON.stringify(body);
+    if (Buffer.byteLength(init.body, 'utf8') > REQUEST_MAX_BYTES) {
+      throw new Error('HTTP request body exceeds 1 MiB');
+    }
   }
   const res = await fetch(url, init).catch(() => {
     throw new Error('HTTP request failed');
@@ -365,7 +425,7 @@ async function httpCall(tool, args, headers, base) {
     await res.body?.cancel().catch(() => undefined);
     throw new Error('redirect not allowed');
   }
-  let text = await readBoundedResponseText(res, 8 * 1024 * 1024);
+  let text = await readBoundedResponseText(res, tool === REFRESH_TOOL ? 64 * 1024 : 8 * 1024 * 1024);
   if (!res.ok) {
     for (const [name, value] of Object.entries(headers)) {
       if (name.toLowerCase() === 'x-instance-id') continue;
@@ -396,7 +456,7 @@ async function refreshToken(base, staleToken) {
   // refused config path fails here, not after the server has minted a token.
   configPath();
   const response = await httpCall(
-    { method: 'POST', path: REFRESH_PATH },
+    REFRESH_TOOL,
     {},
     { Authorization: `Bearer ${staleToken}` },
     base
@@ -406,7 +466,7 @@ async function refreshToken(base, staleToken) {
     err.code = errorCode(response);
     throw err;
   }
-  persistToken(response.json.token, Number(response.json.expiresInSeconds));
+  persistToken(response.json.token, response.json.expiresInSeconds);
   return response.json.token;
 }
 
@@ -486,7 +546,7 @@ async function callTool(tool, args) {
 // --- MCP tool registration -----------------------------------------------------
 
 function inputSchemaFor(tool) {
-  if (tool.inputSchema) return tool.inputSchema;
+  if (tool.inputSchema) return { ...tool.inputSchema, additionalProperties: false };
   const properties = {};
   const required = [];
   if (tool.body_schema) {
@@ -499,11 +559,15 @@ function inputSchemaFor(tool) {
   for (const key of tool.query_params || []) {
     if (!properties[key]) properties[key] = { type: 'string', description: `Query parameter "${key}".` };
   }
+  for (const key of tool.path_params || []) {
+    if (!properties[key]) properties[key] = { type: 'string', description: `Path parameter "${key}".` };
+    if (!required.includes(key)) required.push(key);
+  }
   return {
     type: 'object',
     properties,
     ...(required.length ? { required } : {}),
-    additionalProperties: true,
+    additionalProperties: false,
   };
 }
 
@@ -553,7 +617,7 @@ async function handleRequest(request) {
         return;
       }
       try {
-        sendResult(id, await callTool(tool, (params && params.arguments) || {}));
+        sendResult(id, await callTool(tool, params?.arguments ?? {}));
       } catch (err) {
         sendResult(id, toolError(`${tool.name} failed: ${err.message}`));
       }

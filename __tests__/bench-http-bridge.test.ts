@@ -174,7 +174,7 @@ describe('bench-http-bridge', () => {
       method: 'tools/call',
       params: {
         name: 'forge_ticket_status',
-        arguments: { ticketId: 'fgt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },
+        arguments: { id: 'fgt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },
       },
     });
 
@@ -199,7 +199,7 @@ describe('bench-http-bridge', () => {
       method: 'tools/call',
       params: {
         name: 'forge_ticket_status',
-        arguments: { ticketId: 'fgt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },
+        arguments: { id: 'fgt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },
       },
     });
 
@@ -239,7 +239,7 @@ describe('bench-http-bridge', () => {
         method: 'tools/call',
         params: {
           name: 'forge_ticket_status',
-          arguments: { ticketId: 'fgt_cccccccccccccccccccccccccccccccc' },
+          arguments: { id: 'fgt_cccccccccccccccccccccccccccccccc' },
         },
       });
 
@@ -286,7 +286,7 @@ describe('bench-http-bridge', () => {
         method: 'tools/call',
         params: {
           name: 'forge_ticket_status',
-          arguments: { ticketId: 'fgt_dddddddddddddddddddddddddddddddd' },
+          arguments: { id: 'fgt_dddddddddddddddddddddddddddddddd' },
         },
       });
 
@@ -594,7 +594,7 @@ describe('credentialed bridge response limits', () => {
     `);
     const bridge = spawnBridge(configPath, forgeManifestPath, { NODE_OPTIONS: `--require ${JSON.stringify(preload)}` });
     bridge.send({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: {
-      name: 'forge_ticket_status', arguments: { ticketId: 'fgt_cccccccccccccccccccccccccccccccc' },
+      name: 'forge_ticket_status', arguments: { id: 'fgt_cccccccccccccccccccccccccccccccc' },
     } });
     const [message] = await bridge.waitForMessageCount(1);
     const result = message.result as { content: Array<{ text: string }>; isError?: boolean };
@@ -673,7 +673,7 @@ describe('two companies on one Mac', () => {
       jsonrpc: '2.0',
       id: 1,
       method: 'tools/call',
-      params: { name: 'forge_ticket_status', arguments: { ticketId: 'fgt_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee' } },
+      params: { name: 'forge_ticket_status', arguments: { id: 'fgt_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee' } },
     });
     const [message] = await bridge.waitForMessageCount(1);
     return message.result as { content: Array<{ text: string }>; isError?: boolean };
@@ -760,5 +760,176 @@ describe('two companies on one Mac', () => {
       expect((await callForge(home, undefined)).isError).not.toBe(true);
       expect(calls).toEqual([{ authorization: 'Bearer primary-token', instanceId: 'tenant-primary' }]);
     });
+  });
+});
+
+describe('manifest request and refresh boundaries', () => {
+  function mockedBridge(fetchSource: string, config: Record<string, unknown> = {}, manifestPath = forgeManifestPath) {
+    const dir = makeTempDir();
+    const configPath = resolve(dir, 'bench-cowork.json');
+    const callsPath = resolve(dir, 'calls.jsonl');
+    const preload = resolve(dir, 'fetch.cjs');
+    writeConfig(configPath, {
+      bench_api_base: 'https://benchagi.com/api/v1',
+      bench_cowork_token: 'stale-token',
+      preserved: { setting: true },
+      ...config,
+    });
+    const original = readFileSync(configPath);
+    writeFileSync(callsPath, '');
+    writeFileSync(preload, `
+      global.fetch = async (url, init) => {
+        require('node:fs').appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify({
+          url: String(url), method: init.method, body: init.body,
+        }) + '\\n');
+        ${fetchSource}
+      };
+    `);
+    const bridge = spawnBridge(configPath, manifestPath, {
+      NODE_OPTIONS: `--require ${JSON.stringify(preload)}`,
+      BENCH_COWORK_TOKEN: 'env-fallback-must-not-bypass-size-cap',
+      BENCH_CHASSIS_API_KEY: 'test-key',
+    });
+    return {
+      bridge, configPath, original,
+      calls: () => readFileSync(callsPath, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line)),
+    };
+  }
+
+  async function invoke(bridge: ReturnType<typeof spawnBridge>, name: string, args: unknown) {
+    bridge.send({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } });
+    const [message] = await bridge.waitForMessageCount(1);
+    return message.result as { isError?: boolean; content: Array<{ text: string }> };
+  }
+
+  it.each([
+    { subject: 's', body: 'b', unexpected: 'never send' },
+    { method: 'DELETE' },
+    { path: '/unlisted' },
+    { _entry_shape: 'documentation is not an input' },
+    [],
+    'body',
+    false,
+  ])('rejects undeclared or non-object arguments before fetch (%j)', async (args) => {
+    const fixture = mockedBridge('throw new Error("fetch must not run");');
+    const result = await invoke(fixture.bridge, 'forge_submit_diagnostics', args);
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/Unknown tool argument|arguments must be an object/);
+    expect(fixture.calls()).toEqual([]);
+  });
+
+  it('refuses unknown GET arguments and unknown tool names before fetch', async () => {
+    const fixture = mockedBridge('throw new Error("fetch must not run");');
+    expect((await invoke(fixture.bridge, 'forge_ticket_status', { ticketId: 'undeclared' })).isError).toBe(true);
+    fixture.bridge.send({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'unlisted', arguments: {} } });
+    const messages = await fixture.bridge.waitForMessageCount(2);
+    expect(messages[1].error).toMatchObject({ code: -32602 });
+    expect(fixture.calls()).toEqual([]);
+  });
+
+  it.each([1024 * 1024, 1024 * 1024 + 1])('enforces the encoded request limit at %i bytes', async (bytes) => {
+    const fixture = mockedBridge('return new Response("{}");');
+    const args = { severity: 'sev-2', subject: 's', body: '' };
+    args.body = 'x'.repeat(bytes - Buffer.byteLength(JSON.stringify(args)));
+    expect(Buffer.byteLength(JSON.stringify(args))).toBe(bytes);
+    const result = await invoke(fixture.bridge, 'forge_submit_diagnostics', args);
+    expect(result.isError === true).toBe(bytes > 1024 * 1024);
+    expect(fixture.calls()).toHaveLength(bytes > 1024 * 1024 ? 0 : 1);
+  });
+
+  it('counts UTF-8 bytes instead of characters for requests', async () => {
+    const fixture = mockedBridge('throw new Error("fetch must not run");');
+    const result = await invoke(fixture.bridge, 'forge_submit_diagnostics', { body: 'é'.repeat(524288) });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/exceeds 1 MiB/);
+    expect(fixture.calls()).toEqual([]);
+  });
+
+  it('uses inputSchema properties for JSON bodies as well as body_schema', async () => {
+    const fixture = mockedBridge('return new Response("{}");', {}, dealsManifestPath);
+    const args = { title: 'Allowed deal', tradeTags: ['roofing'] };
+    expect((await invoke(fixture.bridge, 'deal_create', args)).isError).not.toBe(true);
+    expect(JSON.parse(fixture.calls()[0].body)).toEqual(args);
+  });
+
+  it.each([
+    { method: 'TRACE', path: '/cowork/forge/ticket' },
+    { method: 'GET', path: '//attacker.test' },
+    { method: 'GET', path: '/../../outside' },
+    { method: 'GET', path: '/%2e%2e/outside' },
+    { method: 'GET', path: '/wiki?override=1' },
+    { method: 'GET', path: '/wiki#fragment' },
+    { method: 'GET', path: '/wiki\\outside' },
+  ])('rejects unsafe final manifest destinations (%j)', async (destination) => {
+    const manifestPath = resolve(makeTempDir(), 'manifest.json');
+    writeFileSync(manifestPath, JSON.stringify({
+      name: 'test', transport: { type: 'http' }, tools: [{ name: 'test', ...destination }],
+    }));
+    const fixture = mockedBridge('throw new Error("fetch must not run");', {}, manifestPath);
+    const result = await invoke(fixture.bridge, 'test', {});
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/HTTP method|HTTP path/);
+    expect(fixture.calls()).toEqual([]);
+  });
+
+  it.each(['.', '..'])('refuses a path argument normalized away by URL (%s)', async (id) => {
+    const fixture = mockedBridge('throw new Error("fetch must not run");', {}, dealsManifestPath);
+    expect((await invoke(fixture.bridge, 'deal_get', { id })).isError).toBe(true);
+    expect(fixture.calls()).toEqual([]);
+  });
+
+  it.each([
+    { token: { untrusted: true }, expiresInSeconds: 3600 },
+    { token: ['untrusted'], expiresInSeconds: 3600 },
+    { token: 'x'.repeat(8193), expiresInSeconds: 3600 },
+    { token: '', expiresInSeconds: 3600 },
+    { token: 'bad\r\ntoken', expiresInSeconds: 3600 },
+    { token: 'fresh-token', expiresInSeconds: 0 },
+    { token: 'fresh-token', expiresInSeconds: -1 },
+    { token: 'fresh-token', expiresInSeconds: '3600' },
+    { token: 'fresh-token', expiresInSeconds: null },
+    { token: 'fresh-token' },
+    { token: 'fresh-token', expiresInSeconds: 1e300 },
+  ])('leaves the config byte-identical on invalid refresh (%#)', async (refresh) => {
+    const fixture = mockedBridge(`
+      if (String(url).endsWith('/cowork/auth/refresh')) return new Response(${JSON.stringify(JSON.stringify(refresh))});
+      return Response.json({code: 'COWORK_BAD_TOKEN'}, {status: 401});
+    `);
+    const result = await invoke(fixture.bridge, 'forge_ticket_status', { id: 'ticket' });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/refresh failed/);
+    expect(fixture.calls()).toHaveLength(2);
+    expect(readFileSync(fixture.configPath)).toEqual(fixture.original);
+  });
+
+  it('caps the refresh response before parsing or persistence', async () => {
+    const fixture = mockedBridge(`
+      if (String(url).endsWith('/cowork/auth/refresh')) return new Response(' '.repeat(65537));
+      return Response.json({code: 'COWORK_BAD_TOKEN'}, {status: 401});
+    `);
+    expect((await invoke(fixture.bridge, 'forge_ticket_status', { id: 'ticket' })).isError).toBe(true);
+    expect(readFileSync(fixture.configPath)).toEqual(fixture.original);
+    expect(fixture.calls()).toHaveLength(2);
+  });
+
+  it('rejects an oversized config even with an environment token', async () => {
+    const fixture = mockedBridge('throw new Error("fetch must not run");', { extra: 'x'.repeat(65536) });
+    const result = await invoke(fixture.bridge, 'forge_ticket_status', { id: 'ticket' });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/config exceeds 64 KiB/);
+    expect(fixture.calls()).toEqual([]);
+    expect(readFileSync(fixture.configPath)).toEqual(fixture.original);
+  });
+
+  it('refuses a refresh that would grow the config over 64 KiB', async () => {
+    const fixture = mockedBridge(`
+      if (String(url).endsWith('/cowork/auth/refresh')) return Response.json({ token: 'x'.repeat(8192), expiresInSeconds: 3600 });
+      return Response.json({code: 'COWORK_BAD_TOKEN'}, {status: 401});
+    `, { extra: 'x'.repeat(60000) });
+    const result = await invoke(fixture.bridge, 'forge_ticket_status', { id: 'ticket' });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/config exceeds 64 KiB/);
+    expect(readFileSync(fixture.configPath)).toEqual(fixture.original);
+    expect(fixture.calls()).toHaveLength(2);
   });
 });
